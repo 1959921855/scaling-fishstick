@@ -2,6 +2,21 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Any
 
+# 模拟异步数据库连接对象，以兼容 main.py 中的 lifespan
+class FakeDatabase:
+    async def connect(self):
+        pass
+    async def disconnect(self):
+        pass
+    async def fetch_all(self, query, values=None):
+        return []
+    async def fetch_one(self, query, values=None):
+        return None
+    async def execute(self, query, values=None):
+        return 1
+
+database = FakeDatabase()
+
 # 内存存储
 sessions: Dict[int, Dict] = {}
 messages: Dict[int, List[Dict]] = {}
@@ -51,7 +66,6 @@ async def delete_session(session_id: int, user_id: str) -> bool:
     return False
 
 async def delete_message_by_id(message_id: int, user_id: str) -> bool:
-    # 简化，不实现单条删除
     return False
 
 async def get_session_last_message(session_id: int):
