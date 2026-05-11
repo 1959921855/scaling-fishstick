@@ -5,17 +5,13 @@ from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, F
 from sqlalchemy.ext.declarative import declarative_base
 from databases import Database
 
-# 数据库路径（Railway 上的可写目录）
 DB_PATH = "/app/data/conversations.db"
-# 增加 timeout=30 秒，避免写锁竞争导致请求超时
 DATABASE_URL = f"sqlite:///{DB_PATH}?timeout=30"
-
 print(f"[database] 数据库路径: {DB_PATH}")
 
 database = Database(DATABASE_URL)
 Base = declarative_base()
 
-# 会话表
 class Session(Base):
     __tablename__ = "sessions"
     id = Column(Integer, primary_key=True, index=True)
@@ -24,7 +20,6 @@ class Session(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
-# 消息表
 class ConversationRecord(Base):
     __tablename__ = "conversations"
     id = Column(Integer, primary_key=True, index=True)
@@ -37,16 +32,17 @@ class ConversationRecord(Base):
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 def init_db():
-    # 创建所有表
+    # 强制删除所有旧表（如果存在）并重新创建，确保表结构最新
+    Base.metadata.drop_all(bind=engine, checkfirst=True)
     Base.metadata.create_all(bind=engine)
-    # 启用 WAL 模式，提高并发性能
+    # 启用 WAL 模式，提高并发
     with engine.connect() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
         conn.execute(text("PRAGMA synchronous=NORMAL"))
         conn.commit()
-    print("数据库表初始化完成")
+    print("数据库表已强制重建并优化")
 
-# ========== 异步 CRUD 操作 ==========
+# 以下是你原有的所有异步函数，保持不变
 async def create_session(user_id: str, title: str = "新对话") -> int:
     query = """
         INSERT INTO sessions (user_id, title, created_at, updated_at)
@@ -95,7 +91,6 @@ async def save_message(user_id: str, session_id: int, role: str, content: str):
         "content": content,
         "timestamp": datetime.now()
     })
-    # 更新会话的更新时间
     update_query = "UPDATE sessions SET updated_at = :updated_at WHERE id = :session_id"
     await database.execute(update_query, values={"updated_at": datetime.now(), "session_id": session_id})
 
