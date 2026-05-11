@@ -1,13 +1,12 @@
 import os
-from pathlib import Path
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, ForeignKey, text
+from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from databases import Database
 
-DB_PATH = "/app/data/conversations.db"
-DATABASE_URL = f"sqlite:///{DB_PATH}?timeout=30"
-print(f"[database] 数据库路径: {DB_PATH}")
+# 从环境变量读取数据库连接 URL（Railway 会自动注入 DATABASE_URL）
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./conversations.db")
+print(f"[database] 连接数据库: {DATABASE_URL}")
 
 database = Database(DATABASE_URL)
 Base = declarative_base()
@@ -29,24 +28,17 @@ class ConversationRecord(Base):
     content = Column(Text)
     timestamp = Column(DateTime, default=datetime.now)
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL)
 
 def init_db():
-    # 强制删除所有旧表（如果存在）并重新创建，确保表结构最新
-    Base.metadata.drop_all(bind=engine, checkfirst=True)
     Base.metadata.create_all(bind=engine)
-    # 启用 WAL 模式，提高并发
-    with engine.connect() as conn:
-        conn.execute(text("PRAGMA journal_mode=WAL"))
-        conn.execute(text("PRAGMA synchronous=NORMAL"))
-        conn.commit()
-    print("数据库表已强制重建并优化")
+    print("数据库表初始化完成 (PostgreSQL)")
 
-# 以下是你原有的所有异步函数，保持不变
 async def create_session(user_id: str, title: str = "新对话") -> int:
     query = """
         INSERT INTO sessions (user_id, title, created_at, updated_at)
         VALUES (:user_id, :title, :created_at, :updated_at)
+        RETURNING id
     """
     now = datetime.now()
     result = await database.execute(query, values={
@@ -91,25 +83,30 @@ async def save_message(user_id: str, session_id: int, role: str, content: str):
         "content": content,
         "timestamp": datetime.now()
     })
-    update_query = "UPDATE sessions SET updated_at = :updated_at WHERE id = :session_id"
-    await database.execute(update_query, values={"updated_at": datetime.now(), "session_id": session_id})
+    await database.execute(
+        "UPDATE sessions SET updated_at = :updated_at WHERE id = :session_id",
+        values={"updated_at": datetime.now(), "session_id": session_id}
+    )
 
 async def delete_session(session_id: int, user_id: str) -> bool:
-    query = "DELETE FROM sessions WHERE id = :session_id AND user_id = :user_id"
-    result = await database.execute(query, values={"session_id": session_id, "user_id": user_id})
+    result = await database.execute(
+        "DELETE FROM sessions WHERE id = :session_id AND user_id = :user_id",
+        values={"session_id": session_id, "user_id": user_id}
+    )
     return result > 0
 
 async def delete_message_by_id(message_id: int, user_id: str) -> bool:
-    query = "DELETE FROM conversations WHERE id = :id AND user_id = :user_id"
-    result = await database.execute(query, values={"id": message_id, "user_id": user_id})
+    result = await database.execute(
+        "DELETE FROM conversations WHERE id = :id AND user_id = :user_id",
+        values={"id": message_id, "user_id": user_id}
+    )
     return result > 0
 
 async def get_session_last_message(session_id: int):
-    query = """
+    row = await database.fetch_one("""
         SELECT content, role FROM conversations
         WHERE session_id = :session_id
         ORDER BY timestamp DESC
         LIMIT 1
-    """
-    row = await database.fetch_one(query, values={"session_id": session_id})
+    """, values={"session_id": session_id})
     return row
