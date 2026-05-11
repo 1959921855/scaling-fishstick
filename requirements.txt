@@ -11,3 +11,4 @@ aiofiles==23.2.1
 emoji==2.14.0
 sqlalchemy>=2.0.0
 databases[aiosqlite]>=0.9.0
+jinja2>=3.0.0
