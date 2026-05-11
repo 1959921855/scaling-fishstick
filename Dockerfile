@@ -19,6 +19,6 @@ COPY . .
 # 创建数据持久化目录
 RUN mkdir -p /app/data
 
-EXPOSE 8000
+EXPOSE 8080
 
 CMD ["python", "-m", "app.main"]
