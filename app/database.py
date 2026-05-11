@@ -7,7 +7,6 @@ from databases import Database
 
 DB_PATH = "/app/data/conversations.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}?timeout=30"
-
 print(f"[database] 数据库路径: {DB_PATH}")
 
 database = Database(DATABASE_URL)
@@ -33,13 +32,18 @@ class ConversationRecord(Base):
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 def init_db():
+    # 确保目录存在
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    # 创建所有表（如果表已存在，不会重复创建）
+    Base.metadata.create_all(bind=engine)
+    # 优化性能
     with engine.connect() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
         conn.execute(text("PRAGMA synchronous=NORMAL"))
         conn.commit()
-    Base.metadata.create_all(bind=engine)
     print("数据库表初始化完成")
 
+# ========== 以下是你已有的所有异步函数，保持不变 ==========
 async def create_session(user_id: str, title: str = "新对话") -> int:
     query = """
         INSERT INTO sessions (user_id, title, created_at, updated_at)
