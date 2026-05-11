@@ -4,8 +4,17 @@ from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, F
 from sqlalchemy.ext.declarative import declarative_base
 from databases import Database
 
-# 从环境变量读取数据库连接 URL（Railway 会自动注入 DATABASE_URL）
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./conversations.db")
+# 打印环境变量，用于调试
+print("=== Environment variables ===")
+print("DATABASE_URL:", os.getenv("DATABASE_URL"))
+print("PGHOST:", os.getenv("PGHOST"))
+print("PGDATABASE:", os.getenv("PGDATABASE"))
+
+# 强制使用 PostgreSQL，如果没有则报错
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("❌ DATABASE_URL environment variable not set! Cannot connect to PostgreSQL.")
+
 print(f"[database] 连接数据库: {DATABASE_URL}")
 
 database = Database(DATABASE_URL)
