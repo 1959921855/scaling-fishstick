@@ -5,16 +5,18 @@ from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, F
 from sqlalchemy.ext.declarative import declarative_base
 from databases import Database
 
-DATA_DIR = os.getenv("DATA_DIR", str(Path(__file__).parent.parent))
+# ========== 数据库路径配置 ==========
+# 使用 Railway 上的可写目录
 DB_PATH = "/app/data/conversations.db"
-DATABASE_URL = f"sqlite:///{DB_PATH}"
+# 增加 timeout=30 秒，避免写锁竞争导致请求超时
+DATABASE_URL = f"sqlite:///{DB_PATH}?timeout=30"
 
 print(f"[database] 数据库路径: {DB_PATH}")
 
 database = Database(DATABASE_URL)
 Base = declarative_base()
 
-# 会话表
+# ========== 会话表 ==========
 class Session(Base):
     __tablename__ = "sessions"
     id = Column(Integer, primary_key=True, index=True)
@@ -23,7 +25,7 @@ class Session(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
-# 消息表，关联会话
+# ========== 消息表 ==========
 class ConversationRecord(Base):
     __tablename__ = "conversations"
     id = Column(Integer, primary_key=True, index=True)
@@ -33,12 +35,19 @@ class ConversationRecord(Base):
     content = Column(Text)
     timestamp = Column(DateTime, default=datetime.now)
 
+# ========== 同步引擎（用于创建表） ==========
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 def init_db():
+    """初始化数据库：创建表并优化并发性能"""
+    # 启用 WAL 模式，提高读写并发能力
+    with engine.connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
     Base.metadata.create_all(bind=engine)
     print("数据库表初始化完成")
 
+# ========== 异步 CRUD 操作 ==========
 async def create_session(user_id: str, title: str = "新对话") -> int:
     query = """
         INSERT INTO sessions (user_id, title, created_at, updated_at)
