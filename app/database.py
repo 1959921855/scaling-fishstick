@@ -6,7 +6,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from databases import Database
 
 DATA_DIR = os.getenv("DATA_DIR", str(Path(__file__).parent.parent))
-DB_PATH = os.path.join(DATA_DIR, "conversations.db")
+DB_PATH = "/app/data/conversations.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 print(f"[database] 数据库路径: {DB_PATH}")
