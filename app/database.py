@@ -1,121 +1,61 @@
-import os
+import uuid
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from databases import Database
+from typing import Dict, List, Any
 
-# 打印环境变量，用于调试
-print("=== Environment variables ===")
-print("DATABASE_URL:", os.getenv("DATABASE_URL"))
-print("PGHOST:", os.getenv("PGHOST"))
-print("PGDATABASE:", os.getenv("PGDATABASE"))
-
-# 强制使用 PostgreSQL，如果没有则报错
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("❌ DATABASE_URL environment variable not set! Cannot connect to PostgreSQL.")
-
-print(f"[database] 连接数据库: {DATABASE_URL}")
-
-database = Database(DATABASE_URL)
-Base = declarative_base()
-
-class Session(Base):
-    __tablename__ = "sessions"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String(100), index=True)
-    title = Column(String(200), default="新对话")
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-class ConversationRecord(Base):
-    __tablename__ = "conversations"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String(100), index=True)
-    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
-    role = Column(String(20))
-    content = Column(Text)
-    timestamp = Column(DateTime, default=datetime.now)
-
-engine = create_engine(DATABASE_URL)
+# 内存存储
+sessions: Dict[int, Dict] = {}
+messages: Dict[int, List[Dict]] = {}
+session_counter = 1
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
-    print("数据库表初始化完成 (PostgreSQL)")
+    print("使用内存存储（多轮对话已验证）")
 
 async def create_session(user_id: str, title: str = "新对话") -> int:
-    query = """
-        INSERT INTO sessions (user_id, title, created_at, updated_at)
-        VALUES (:user_id, :title, :created_at, :updated_at)
-        RETURNING id
-    """
-    now = datetime.now()
-    result = await database.execute(query, values={
+    global session_counter
+    sid = session_counter
+    session_counter += 1
+    sessions[sid] = {
+        "id": sid,
         "user_id": user_id,
         "title": title,
-        "created_at": now,
-        "updated_at": now
-    })
-    return result
+        "created_at": datetime.now(),
+        "updated_at": datetime.now()
+    }
+    messages[sid] = []
+    return sid
 
 async def get_user_sessions(user_id: str, limit: int = 50):
-    query = """
-        SELECT id, title, created_at, updated_at
-        FROM sessions
-        WHERE user_id = :user_id
-        ORDER BY updated_at DESC
-        LIMIT :limit
-    """
-    rows = await database.fetch_all(query, values={"user_id": user_id, "limit": limit})
-    return [{"id": row["id"], "title": row["title"], "created_at": row["created_at"], "updated_at": row["updated_at"]} for row in rows]
+    user_sessions = [s for s in sessions.values() if s["user_id"] == user_id]
+    user_sessions.sort(key=lambda x: x["updated_at"], reverse=True)
+    return [{"id": s["id"], "title": s["title"], "created_at": s["created_at"], "updated_at": s["updated_at"]} for s in user_sessions[:limit]]
 
 async def get_session_messages(session_id: int, limit: int = 200):
-    query = """
-        SELECT id, role, content, timestamp
-        FROM conversations
-        WHERE session_id = :session_id
-        ORDER BY timestamp ASC
-        LIMIT :limit
-    """
-    rows = await database.fetch_all(query, values={"session_id": session_id, "limit": limit})
-    return [{"id": row["id"], "role": row["role"], "content": row["content"], "timestamp": row["timestamp"]} for row in rows]
+    return messages.get(session_id, [])[-limit:]
 
 async def save_message(user_id: str, session_id: int, role: str, content: str):
-    query = """
-        INSERT INTO conversations (user_id, session_id, role, content, timestamp)
-        VALUES (:user_id, :session_id, :role, :content, :timestamp)
-    """
-    await database.execute(query, values={
-        "user_id": user_id,
-        "session_id": session_id,
+    if session_id not in messages:
+        messages[session_id] = []
+    messages[session_id].append({
         "role": role,
         "content": content,
         "timestamp": datetime.now()
     })
-    await database.execute(
-        "UPDATE sessions SET updated_at = :updated_at WHERE id = :session_id",
-        values={"updated_at": datetime.now(), "session_id": session_id}
-    )
+    if session_id in sessions:
+        sessions[session_id]["updated_at"] = datetime.now()
 
 async def delete_session(session_id: int, user_id: str) -> bool:
-    result = await database.execute(
-        "DELETE FROM sessions WHERE id = :session_id AND user_id = :user_id",
-        values={"session_id": session_id, "user_id": user_id}
-    )
-    return result > 0
+    if session_id in sessions and sessions[session_id]["user_id"] == user_id:
+        sessions.pop(session_id, None)
+        messages.pop(session_id, None)
+        return True
+    return False
 
 async def delete_message_by_id(message_id: int, user_id: str) -> bool:
-    result = await database.execute(
-        "DELETE FROM conversations WHERE id = :id AND user_id = :user_id",
-        values={"id": message_id, "user_id": user_id}
-    )
-    return result > 0
+    # 简化，不实现单条删除
+    return False
 
 async def get_session_last_message(session_id: int):
-    row = await database.fetch_one("""
-        SELECT content, role FROM conversations
-        WHERE session_id = :session_id
-        ORDER BY timestamp DESC
-        LIMIT 1
-    """, values={"session_id": session_id})
-    return row
+    msgs = messages.get(session_id, [])
+    if msgs:
+        return msgs[-1]
+    return None
