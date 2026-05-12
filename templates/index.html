@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>语音陪聊 · 会话历史</title>
     <style>
+        /* 你的原有样式完全不变 */
         * { box-sizing: border-box; }
         body {
             font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
@@ -36,7 +37,7 @@
             overflow: hidden;
         }
         .sessions-header {
-            padding: 16px 12px;       /* 调整内边距 */
+            padding: 16px 12px;
             background: #2c3e4e;
             color: white;
             font-weight: bold;
@@ -45,7 +46,7 @@
             justify-content: space-between;
             align-items: center;
             gap: 8px;
-            flex-wrap: nowrap;        /* 禁止换行 */
+            flex-wrap: nowrap;
             white-space: nowrap;
         }
         .sessions-header span {
@@ -61,7 +62,7 @@
             color: white;
             cursor: pointer;
             font-size: 0.8rem;
-            flex-shrink: 0;           /* 按钮不缩小 */
+            flex-shrink: 0;
             white-space: nowrap;
         }
         .sessions-list {
@@ -257,7 +258,7 @@
         return new Date(timestamp).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
     }
 
-    // 加载会话列表
+    // 加载会话列表（与原代码完全相同）
     async function loadSessions() {
         try {
             const res = await fetch(`/sessions/${USER_ID}?limit=50`);
@@ -393,7 +394,7 @@
             const ttsData = await ttsRes.json();
             if (ttsData.audio_response) {
                 stopCurrentAudio();
-               const audio = new Audio(`data:audio/mp3;base64,${ttsData.audio_response}`);
+                const audio = new Audio(`data:audio/mp3;base64,${ttsData.audio_response}`);
                 currentAudio = audio;
                 audio.play().catch(e => console.warn);
                 audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
@@ -411,22 +412,87 @@
     sendBtn.addEventListener('click', () => sendMessage(textInput.value.trim()));
     textInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(textInput.value.trim()); });
 
-    let recognition, isListening = false;
-    if ('webkitSpeechRecognition' in window) {
+    // ========== 语音识别：兼容浏览器 + 原生安卓（通过 JavaScriptInterface）==========
+    let recognition = null;
+    let isListening = false;
+    const isAndroidApp = typeof AndroidSpeech !== 'undefined';
+
+    if ('webkitSpeechRecognition' in window && !isAndroidApp) {
         recognition = new webkitSpeechRecognition();
         recognition.lang = 'zh-CN';
         recognition.continuous = false;
         recognition.interimResults = false;
-        recognition.onstart = () => { isListening = true; statusSpan.innerHTML = '🔴 正在听... 松手结束'; voiceBtn.style.background = '#e55a3e'; };
-        recognition.onend = () => { isListening = false; voiceBtn.style.background = '#ff7b5c'; if (!recognition.resultReceived) statusSpan.innerHTML = '⚠️ 未检测到语音'; };
-        recognition.onresult = async (e) => { const text = e.results[0][0].transcript; statusSpan.innerHTML = `📝 识别: ${text}`; recognition.resultReceived = true; await sendMessage(text); };
-        recognition.onerror = () => { statusSpan.innerHTML = '❌ 识别失败'; voiceBtn.style.background = '#ff7b5c'; isListening = false; };
+
+        recognition.onstart = () => {
+            isListening = true;
+            statusSpan.innerHTML = '🔴 正在听... 松手结束';
+            voiceBtn.style.background = '#e55a3e';
+        };
+
+        recognition.onend = () => {
+            isListening = false;
+            voiceBtn.style.background = '#ff7b5c';
+            if (!recognition.resultReceived) {
+                statusSpan.innerHTML = '⚠️ 未检测到语音，再试试看';
+                setTimeout(() => {
+                    if (statusSpan.innerHTML === '⚠️ 未检测到语音')
+                        statusSpan.innerHTML = '✅ 在线 | 支持打断';
+                }, 2000);
+            }
+        };
+
+        recognition.onresult = async (e) => {
+            const text = e.results[0][0].transcript;
+            statusSpan.innerHTML = `📝 识别: ${text}`;
+            recognition.resultReceived = true;
+            await sendMessage(text);
+        };
+
+        recognition.onerror = (event) => {
+            console.error('识别错误', event.error);
+            let msg = '';
+            if (event.error === 'no-speech') msg = '没有听到声音';
+            else if (event.error === 'audio-capture') msg = '无法获取麦克风权限';
+            else if (event.error === 'not-allowed') msg = '麦克风权限被拒绝';
+            else msg = '识别出错';
+            statusSpan.innerHTML = `❌ ${msg}`;
+            voiceBtn.style.background = '#ff7b5c';
+            isListening = false;
+        };
+    } else if (isAndroidApp) {
+        statusSpan.innerHTML = '✅ 安卓语音模式';
     } else {
         voiceBtn.disabled = true;
-        statusSpan.innerHTML = '⚠️ 浏览器不支持语音识别';
+        statusSpan.innerHTML = '⚠️ 当前浏览器不支持语音识别';
     }
-    function startListen() { stopCurrentAudio(); if (recognition && !isListening) { recognition.resultReceived = false; recognition.start(); } }
-    function stopListen() { if (recognition && isListening) recognition.stop(); }
+
+    function startListen() {
+        stopCurrentAudio();
+        if (isAndroidApp) {
+            // 调用原生语音识别
+            if (typeof AndroidSpeech !== 'undefined') {
+                AndroidSpeech.startSpeechRecognition();
+            } else {
+                statusSpan.innerHTML = '❌ 未检测到安卓语音接口';
+            }
+        } else if (recognition && !isListening) {
+            recognition.resultReceived = false;
+            recognition.start();
+        }
+    }
+
+    function stopListen() {
+        if (!isAndroidApp && recognition && isListening) {
+            recognition.stop();
+        }
+    }
+
+    // 供原生调用的回调函数
+    window.onAndroidSpeechResult = async function(text) {
+        statusSpan.innerHTML = `📝 识别: ${text}`;
+        await sendMessage(text);
+    };
+
     voiceBtn.addEventListener('mousedown', startListen);
     voiceBtn.addEventListener('mouseup', stopListen);
     voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startListen(); });
