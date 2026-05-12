@@ -1,39 +1,3 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>语音陪聊 · 会话历史</title>
-    <style>
-        /* 您的原有样式保持不变，为节省篇幅此处省略，请自行复制原有样式 */
-        /* 注意：实际使用时请将您原有的完整样式粘贴在此处 */
-    </style>
-</head>
-<body>
-<div class="app-container">
-    <div class="sessions-sidebar">
-        <div class="sessions-header">
-            <span>💬 历史对话</span>
-            <button class="new-session-btn" id="newSessionBtn">+ 新对话</button>
-        </div>
-        <div class="sessions-list" id="sessionsList">加载中...</div>
-    </div>
-    <div class="chat-area">
-        <div class="chat-header">🎙️ 智能语音陪聊 · 小暖</div>
-        <div class="messages" id="messageBox">
-            <div class="message ai">加载会话中...</div>
-        </div>
-        <div class="input-area">
-            <div class="text-input-row">
-                <input type="text" id="textInput" placeholder="输入文字..." autocomplete="off">
-                <button class="send-btn" id="sendTextBtn">发送</button>
-            </div>
-            <button class="voice-btn" id="voiceBtn">🎤 按住 说话</button>
-            <div class="status" id="statusMsg">✅ 在线 | 支持打断</div>
-        </div>
-    </div>
-</div>
-
 <script>
 (function() {
     const USER_ID = 'web_user';
@@ -69,7 +33,7 @@
         return new Date(timestamp).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
     }
 
-    // 加载会话列表（与原代码完全相同）
+    // 加载会话列表（与原代码相同）
     async function loadSessions() {
         try {
             const res = await fetch(`/sessions/${USER_ID}?limit=50`);
@@ -110,7 +74,10 @@
                     if (sid) loadSessionMessages(sid);
                 });
             });
-        } catch (err) { console.error(err); sessionsListDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">加载失败</div>'; }
+        } catch (err) {
+            console.error(err);
+            sessionsListDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">加载失败</div>';
+        }
     }
 
     async function deleteSession(sessionId) {
@@ -123,7 +90,7 @@
                 }
                 await loadSessions();
             } else alert('删除失败');
-        } catch(err) { alert('删除失败'); }
+        } catch (err) { alert('删除失败'); }
     }
 
     async function loadSessionMessages(sessionId) {
@@ -147,7 +114,10 @@
             }
             currentSessionId = sessionId;
             await loadSessions();
-        } catch(err) { console.error(err); messageBox.innerHTML = '<div class="message ai">加载消息失败</div>'; }
+        } catch (err) {
+            console.error(err);
+            messageBox.innerHTML = '<div class="message ai">加载消息失败，请刷新重试</div>';
+        }
     }
 
     async function createNewSession() {
@@ -163,7 +133,9 @@
             await loadSessionMessages(newSessionId);
             statusSpan.innerHTML = '✨ 新对话已创建';
             setTimeout(() => statusSpan.innerHTML = '✅ 在线 | 支持打断', 2000);
-        } catch(err) { alert('创建失败'); }
+        } catch (err) {
+            alert('创建失败');
+        }
     }
     newSessionBtn.addEventListener('click', createNewSession);
 
@@ -171,7 +143,10 @@
         if (!userText.trim()) return;
         if (!currentSessionId) {
             await createNewSession();
-            if (!currentSessionId) { statusSpan.innerHTML = '❌ 请先创建会话'; return; }
+            if (!currentSessionId) {
+                statusSpan.innerHTML = '❌ 请先创建会话';
+                return;
+            }
         }
         stopCurrentAudio();
         textInput.value = '';
@@ -200,8 +175,10 @@
                 audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
                 statusSpan.innerHTML = '🔊 已播放回复';
             } else statusSpan.innerHTML = '✅ 回复完成';
-        } catch(err) { console.error(err); statusSpan.innerHTML = '❌ 网络错误'; }
-        finally {
+        } catch (err) {
+            console.error(err);
+            statusSpan.innerHTML = '❌ 网络错误';
+        } finally {
             sendBtn.disabled = voiceBtn.disabled = false;
             setTimeout(() => statusSpan.innerHTML = '✅ 在线 | 支持打断', 2000);
         }
@@ -210,15 +187,15 @@
     sendBtn.addEventListener('click', () => sendMessage(textInput.value.trim()));
     textInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(textInput.value.trim()); });
 
-    // ========== 修复语音识别：每次动态创建实例 ==========
+    // ========== 修复语音识别：每次动态创建实例，解决 APK 中只能使用一次的问题 ==========
     let isListening = false;
-    let currentRecognition = null;
+    let currentRecognition = null;  // 保存当前激活的识别实例，用于停止
 
     function startListening() {
-        if (isListening) return;
-        stopCurrentAudio();
+        if (isListening) return;       // 已经在录音中
+        stopCurrentAudio();            // 打断正在播放的语音
 
-        // 销毁旧的实例（如果有）
+        // 销毁旧的识别实例（如果有）
         if (currentRecognition) {
             try { currentRecognition.abort(); } catch(e) {}
             currentRecognition = null;
@@ -244,13 +221,13 @@
             isListening = false;
             voiceBtn.style.background = '#ff7b5c';
             if (!recognition.resultReceived) {
-                statusSpan.innerHTML = '⚠️ 未检测到语音';
+                statusSpan.innerHTML = '⚠️ 未检测到语音，再试试看';
                 setTimeout(() => {
                     if (statusSpan.innerHTML === '⚠️ 未检测到语音')
                         statusSpan.innerHTML = '✅ 在线 | 支持打断';
                 }, 2000);
             }
-            // 释放引用
+            // 释放引用，允许下次创建新实例
             if (currentRecognition === recognition) currentRecognition = null;
         };
 
@@ -293,5 +270,3 @@
     loadSessions();
 })();
 </script>
-</body>
-</html>
