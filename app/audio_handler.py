@@ -38,4 +38,4 @@ class AudioHandler:
             return b""
 
     def audio_to_base64(self, audio_bytes: bytes) -> str:
-        return base64.b64encode(audio_bytes).decode('utf-8')
+        return base64.b64encode(audio_bytes).decode('utf-8') 
