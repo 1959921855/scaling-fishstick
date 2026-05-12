@@ -393,7 +393,7 @@
             const ttsData = await ttsRes.json();
             if (ttsData.audio_response) {
                 stopCurrentAudio();
-                const audio = new Audio(`data:audio/wav;base64,${ttsData.audio_response}`);
+               const audio = new Audio(`data:audio/mp3;base64,${ttsData.audio_response}`);
                 currentAudio = audio;
                 audio.play().catch(e => console.warn);
                 audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
