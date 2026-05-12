@@ -1,3 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>语音陪聊 · 会话历史</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(145deg, #1e2b3c 0%, #0f1a24 100%);
+            min-height: 100vh;
+            margin: 0;
+            padding: 16px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .app-container {
+            display: flex;
+            width: 100%;
+            max-width: 1400px;
+            height: 90vh;
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(8px);
+            border-radius: 32px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+        }
+        .sessions-sidebar {
+            width: 300px;
+            background: rgba(30, 43, 60, 0.85);
+            border-right: 1px solid rgba(255,255,255,0.2);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sessions-header {
+            padding: 16px 12px;       /* 调整内边距 */
+            background: #2c3e4e;
+            color: white;
+            font-weight: bold;
+            font-size: 1.1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: nowrap;        /* 禁止换行 */
+            white-space: nowrap;
+        }
+        .sessions-header span {
+            flex-shrink: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .new-session-btn {
+            background: #3b6eff;
+            border: none;
+            border-radius: 20px;
+            padding: 6px 12px;
+            color: white;
+            cursor: pointer;
+            font-size: 0.8rem;
+            flex-shrink: 0;           /* 按钮不缩小 */
+            white-space: nowrap;
+        }
+        .sessions-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+        .session-item {
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: 0.2s;
+            color: #e2e8f0;
+        }
+        .session-item:hover {
+            background: rgba(59,110,255,0.4);
+        }
+        .session-item.active {
+            background: #3b6eff;
+            color: white;
+        }
+        .session-title {
+            font-weight: bold;
+            margin-bottom: 4px;
+            font-size: 0.95rem;
+            word-break: break-word;
+        }
+        .session-preview {
+            font-size: 0.75rem;
+            color: #cbd5e1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .session-time {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+        .delete-session {
+            float: right;
+            background: rgba(255,255,255,0.2);
+            border: none;
+            border-radius: 50%;
+            width: 22px;
+            height: 22px;
+            color: #ff7b5c;
+            cursor: pointer;
+            font-size: 12px;
+            text-align: center;
+        }
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(248,250,255,0.95);
+        }
+        .chat-header {
+            background: #2c3e4e;
+            color: white;
+            padding: 18px 20px;
+            text-align: center;
+            font-size: 1.5rem;
+        }
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .message {
+            max-width: 80%;
+            padding: 10px 16px;
+            border-radius: 24px;
+            line-height: 1.45;
+        }
+        .message.user {
+            align-self: flex-end;
+            background: #3b6eff;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        .message.ai {
+            align-self: flex-start;
+            background: white;
+            color: #1f2a3e;
+            border-bottom-left-radius: 4px;
+            border: 1px solid #e2e8f0;
+        }
+        .input-area {
+            background: white;
+            padding: 16px 20px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .text-input-row {
+            display: flex;
+            gap: 12px;
+        }
+        #textInput {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 32px;
+        }
+        .send-btn, .voice-btn {
+            border: none;
+            border-radius: 40px;
+            padding: 12px 20px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .send-btn {
+            background: #3b6eff;
+            color: white;
+        }
+        .voice-btn {
+            background: #ff7b5c;
+            color: white;
+            width: 80%;
+            margin: 0 auto;
+        }
+        .status {
+            font-size: 0.75rem;
+            text-align: center;
+            color: #2c3e4e;
+        }
+        button:disabled { opacity: 0.5; }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="sessions-sidebar">
+        <div class="sessions-header">
+            <span>💬 历史对话</span>
+            <button class="new-session-btn" id="newSessionBtn">+ 新对话</button>
+        </div>
+        <div class="sessions-list" id="sessionsList">加载中...</div>
+    </div>
+    <div class="chat-area">
+        <div class="chat-header">🎙️ 智能语音陪聊 · 小暖</div>
+        <div class="messages" id="messageBox">
+            <div class="message ai">加载会话中...</div>
+        </div>
+        <div class="input-area">
+            <div class="text-input-row">
+                <input type="text" id="textInput" placeholder="输入文字..." autocomplete="off">
+                <button class="send-btn" id="sendTextBtn">发送</button>
+            </div>
+            <button class="voice-btn" id="voiceBtn">🎤 按住 说话</button>
+            <div class="status" id="statusMsg">✅ 在线 | 支持打断</div>
+        </div>
+    </div>
+</div>
+
 <script>
 (function() {
     const USER_ID = 'web_user';
@@ -33,7 +257,7 @@
         return new Date(timestamp).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
     }
 
-    // 加载会话列表（与原代码相同）
+    // 加载会话列表
     async function loadSessions() {
         try {
             const res = await fetch(`/sessions/${USER_ID}?limit=50`);
@@ -169,7 +393,7 @@
             const ttsData = await ttsRes.json();
             if (ttsData.audio_response) {
                 stopCurrentAudio();
-                const audio = new Audio(`data:audio/mp3;base64,${ttsData.audio_response}`);
+               const audio = new Audio(`data:audio/mp3;base64,${ttsData.audio_response}`);
                 currentAudio = audio;
                 audio.play().catch(e => console.warn);
                 audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
@@ -187,86 +411,29 @@
     sendBtn.addEventListener('click', () => sendMessage(textInput.value.trim()));
     textInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(textInput.value.trim()); });
 
-    // ========== 修复语音识别：每次动态创建实例，解决 APK 中只能使用一次的问题 ==========
-    let isListening = false;
-    let currentRecognition = null;  // 保存当前激活的识别实例，用于停止
-
-    function startListening() {
-        if (isListening) return;       // 已经在录音中
-        stopCurrentAudio();            // 打断正在播放的语音
-
-        // 销毁旧的识别实例（如果有）
-        if (currentRecognition) {
-            try { currentRecognition.abort(); } catch(e) {}
-            currentRecognition = null;
-        }
-
-        if (!('webkitSpeechRecognition' in window)) {
-            statusSpan.innerHTML = '❌ 浏览器不支持语音识别';
-            return;
-        }
-
-        const recognition = new webkitSpeechRecognition();
+    let recognition, isListening = false;
+    if ('webkitSpeechRecognition' in window) {
+        recognition = new webkitSpeechRecognition();
+        recognition.lang = 'zh-CN';
         recognition.continuous = false;
         recognition.interimResults = false;
-        recognition.lang = 'zh-CN';
-
-        recognition.onstart = () => {
-            isListening = true;
-            statusSpan.innerHTML = '🔴 正在听... 松手结束';
-            voiceBtn.style.background = '#e55a3e';
-        };
-
-        recognition.onend = () => {
-            isListening = false;
-            voiceBtn.style.background = '#ff7b5c';
-            if (!recognition.resultReceived) {
-                statusSpan.innerHTML = '⚠️ 未检测到语音，再试试看';
-                setTimeout(() => {
-                    if (statusSpan.innerHTML === '⚠️ 未检测到语音')
-                        statusSpan.innerHTML = '✅ 在线 | 支持打断';
-                }, 2000);
-            }
-            // 释放引用，允许下次创建新实例
-            if (currentRecognition === recognition) currentRecognition = null;
-        };
-
-        recognition.onresult = async (e) => {
-            const text = e.results[0][0].transcript;
-            statusSpan.innerHTML = `📝 识别: ${text}`;
-            recognition.resultReceived = true;
-            await sendMessage(text);
-        };
-
-        recognition.onerror = (event) => {
-            console.error('识别错误', event.error);
-            let msg = '';
-            if (event.error === 'no-speech') msg = '没有听到声音';
-            else if (event.error === 'audio-capture') msg = '无法获取麦克风权限';
-            else if (event.error === 'not-allowed') msg = '麦克风权限被拒绝';
-            else msg = '识别出错';
-            statusSpan.innerHTML = `❌ ${msg}`;
-            voiceBtn.style.background = '#ff7b5c';
-            isListening = false;
-            if (currentRecognition === recognition) currentRecognition = null;
-        };
-
-        currentRecognition = recognition;
-        recognition.resultReceived = false;
-        recognition.start();
+        recognition.onstart = () => { isListening = true; statusSpan.innerHTML = '🔴 正在听... 松手结束'; voiceBtn.style.background = '#e55a3e'; };
+        recognition.onend = () => { isListening = false; voiceBtn.style.background = '#ff7b5c'; if (!recognition.resultReceived) statusSpan.innerHTML = '⚠️ 未检测到语音'; };
+        recognition.onresult = async (e) => { const text = e.results[0][0].transcript; statusSpan.innerHTML = `📝 识别: ${text}`; recognition.resultReceived = true; await sendMessage(text); };
+        recognition.onerror = () => { statusSpan.innerHTML = '❌ 识别失败'; voiceBtn.style.background = '#ff7b5c'; isListening = false; };
+    } else {
+        voiceBtn.disabled = true;
+        statusSpan.innerHTML = '⚠️ 浏览器不支持语音识别';
     }
-
-    function stopListening() {
-        if (currentRecognition && isListening) {
-            currentRecognition.stop();
-        }
-    }
-
-    voiceBtn.addEventListener('mousedown', startListening);
-    voiceBtn.addEventListener('mouseup', stopListening);
-    voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startListening(); });
-    voiceBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopListening(); });
+    function startListen() { stopCurrentAudio(); if (recognition && !isListening) { recognition.resultReceived = false; recognition.start(); } }
+    function stopListen() { if (recognition && isListening) recognition.stop(); }
+    voiceBtn.addEventListener('mousedown', startListen);
+    voiceBtn.addEventListener('mouseup', stopListen);
+    voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startListen(); });
+    voiceBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopListen(); });
 
     loadSessions();
 })();
 </script>
+</body>
+</html>
