@@ -366,7 +366,7 @@
     let idleTimer = null;
     let lastGreetingTime = 0;
     const IDLE_SECONDS = 20;
-    const GREETING_COOLDOWN = 60 * 1000;
+    const GREETING_COOLDOWN = 60 * 1000; // 该变量已不再使用，可保留或移除
 
     function escapeHtml(str) {
         return str.replace(/[&<>]/g, (m) => (m === '&' ? '&amp;' : (m === '<' ? '&lt;' : '&gt;')));
@@ -380,11 +380,10 @@
         messageBox.scrollTop = messageBox.scrollHeight;
     }
 
+    // *** 修改点：去掉冷却检查，每次20秒空闲都触发问候 ***
     async function triggerGreeting() {
         if (currentAudio || sendBtn.disabled) return;
-        const now = Date.now();
-        if (now - lastGreetingTime < GREETING_COOLDOWN) return;
-        lastGreetingTime = now;
+        // 不再进行冷却限制，直接播报问候
         const greeting = "你好呀，我在这里，有什么想聊的吗？";
         addAIMessage(greeting);
         try {
