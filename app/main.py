@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class ChatRequest(BaseModel):
     message: str
     user_id: Optional[str] = "default_user"
-    session_id: Optional[int] = None   # 可选，如果不传则自动创建新会话
+    session_id: Optional[int] = None
 
 class ChatResponse(BaseModel):
     response: str
@@ -35,6 +35,7 @@ class ChatResponse(BaseModel):
 
 class TextToSpeechRequest(BaseModel):
     text: str
+    voice: Optional[str] = "zh-CN-XiaoxiaoNeural"   # 新增音色参数
 
 class NewSessionRequest(BaseModel):
     user_id: str = "default_user"
@@ -120,7 +121,6 @@ async def new_session(request: NewSessionRequest):
 @app.get("/sessions/{user_id}")
 async def list_sessions(user_id: str, limit: int = 50):
     sessions = await get_user_sessions(user_id, limit)
-    # 增加每个会话的最后一条消息预览
     for s in sessions:
         last_msg = await get_session_last_message(s["id"])
         if last_msg:
@@ -149,19 +149,23 @@ async def delete_message_api(message_id: int, user_id: str = "default_user"):
         raise HTTPException(status_code=404, detail="Message not found")
     return {"status": "deleted"}
 
+# ========== 新增：获取音色列表 ==========
+@app.get("/voices")
+async def get_voices():
+    voices = await audio_handler.get_voices()
+    return {"voices": voices}
+
 # ========== 聊天 API ==========
 @app.post("/chat/text", response_model=ChatResponse)
 async def text_chat(request: ChatRequest):
     user_id = request.user_id
     user_msg = request.message
 
-    # 如果没有提供 session_id，则创建一个新的会话
     if request.session_id is None:
         session_id = await create_session(user_id, "新对话")
     else:
         session_id = request.session_id
 
-    # 获取会话的历史消息（最近10条作为上下文）
     history = await get_session_messages(session_id, limit=10)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for msg in history:
@@ -170,23 +174,20 @@ async def text_chat(request: ChatRequest):
 
     ai_reply = deepseek_service.chat(messages)
 
-    # 保存消息
     await save_message(user_id, session_id, "user", user_msg)
     await save_message(user_id, session_id, "assistant", ai_reply)
 
-    # 可选：自动更新会话标题（根据第一条用户消息）
-    # 如果会话只有这两条消息，可以更新标题
     if len(history) == 0:
-        # 新会话，用用户消息前30字作为标题
         new_title = user_msg[:30] + ("..." if len(user_msg) > 30 else "")
         await database.execute("UPDATE sessions SET title = :title WHERE id = :session_id",
                                values={"title": new_title, "session_id": session_id})
 
     return ChatResponse(response=ai_reply, session_id=session_id)
 
+# ========== 修改 TTS 端点，支持音色参数 ==========
 @app.post("/chat/text-to-speech")
 async def text_to_speech_only(request: TextToSpeechRequest):
-    audio_bytes = audio_handler.text_to_speech(request.text)
+    audio_bytes = await audio_handler.text_to_speech(request.text, request.voice)
     audio_b64 = audio_handler.audio_to_base64(audio_bytes) if audio_bytes else ""
     return {"audio_response": audio_b64}
 
@@ -206,7 +207,8 @@ async def voice_chat(
         chat_res = await text_chat(chat_req)
         ai_text = chat_res.response
 
-        audio_out = audio_handler.text_to_speech(ai_text)
+        # 使用默认音色（或可以从请求中获取，这里简单使用默认）
+        audio_out = await audio_handler.text_to_speech(ai_text)   # 使用默认音色
         audio_b64 = audio_handler.audio_to_base64(audio_out) if audio_out else ""
 
         return {

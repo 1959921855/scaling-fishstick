@@ -4,12 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>语音陪聊 · 小暖</title>
-
     <style>
-        * {
-            box-sizing: border-box;
-        }
-
+        * { box-sizing: border-box; }
         body {
             font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(145deg, #1e2b3c 0%, #0f1a24 100%);
@@ -20,7 +16,6 @@
             justify-content: center;
             align-items: center;
         }
-
         .app-container {
             display: flex;
             width: 100%;
@@ -33,8 +28,6 @@
             box-shadow: 0 20px 40px rgba(0,0,0,0.3);
             position: relative;
         }
-
-        /* 历史栏 */
         .sessions-sidebar {
             width: 300px;
             background: rgba(30, 43, 60, 0.85);
@@ -44,7 +37,6 @@
             overflow: hidden;
             transition: 0.3s;
         }
-
         .sessions-header {
             padding: 16px 12px;
             background: #2c3e4e;
@@ -58,13 +50,7 @@
             flex-wrap: nowrap;
             white-space: nowrap;
         }
-
-        .sessions-header span {
-            flex-shrink: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
+        .sessions-header span { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
         .new-session-btn {
             background: #3b6eff;
             border: none;
@@ -76,13 +62,11 @@
             flex-shrink: 0;
             white-space: nowrap;
         }
-
         .sessions-list {
             flex: 1;
             overflow-y: auto;
             padding: 12px;
         }
-
         .session-item {
             background: rgba(255,255,255,0.1);
             border-radius: 12px;
@@ -93,62 +77,22 @@
             color: #e2e8f0;
             position: relative;
         }
-
-        .session-item:hover {
-            background: rgba(59,110,255,0.4);
-        }
-
-        .session-item.active {
-            background: #3b6eff;
-            color: white;
-        }
-
-        .session-title {
-            font-weight: bold;
-            margin-bottom: 4px;
-            font-size: 0.95rem;
-            word-break: break-word;
-            padding-right: 32px;
-        }
-
-        .session-preview {
-            font-size: 0.75rem;
-            color: #cbd5e1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .session-time {
-            font-size: 0.7rem;
-            color: #94a3b8;
-            margin-top: 4px;
-        }
-
+        .session-item:hover { background: rgba(59,110,255,0.4); }
+        .session-item.active { background: #3b6eff; color: white; }
+        .session-title { font-weight: bold; margin-bottom: 4px; font-size: 0.95rem; word-break: break-word; padding-right: 32px; }
+        .session-preview { font-size: 0.75rem; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .session-time { font-size: 0.7rem; color: #94a3b8; margin-top: 4px; }
         .delete-session {
-            position: absolute;
-            right: 10px;
-            top: 10px;
-            background: rgba(255,255,255,0.2);
-            border: none;
-            border-radius: 50%;
-            width: 24px;
-            height: 24px;
-            color: #ff7b5c;
-            cursor: pointer;
-            font-size: 14px;
-            text-align: center;
-            line-height: 1;
+            position: absolute; right: 10px; top: 10px;
+            background: rgba(255,255,255,0.2); border: none; border-radius: 50%;
+            width: 24px; height: 24px; color: #ff7b5c; cursor: pointer; font-size: 14px;
         }
-
-        /* 聊天区 */
         .chat-area {
             flex: 1;
             display: flex;
             flex-direction: column;
             background: rgba(248,250,255,0.95);
         }
-
         .chat-header {
             background: #2c3e4e;
             color: white;
@@ -157,11 +101,7 @@
             display: flex;
             align-items: center;
         }
-
-        #menuBtn {
-            display: none;
-        }
-
+        #menuBtn { display: none; }
         .messages {
             flex: 1;
             overflow-y: auto;
@@ -170,7 +110,6 @@
             flex-direction: column;
             gap: 14px;
         }
-
         .message {
             max-width: 80%;
             padding: 10px 16px;
@@ -178,14 +117,12 @@
             line-height: 1.45;
             word-break: break-word;
         }
-
         .message.user {
             align-self: flex-end;
             background: #3b6eff;
             color: white;
             border-bottom-right-radius: 4px;
         }
-
         .message.ai {
             align-self: flex-start;
             background: white;
@@ -193,7 +130,6 @@
             border-bottom-left-radius: 4px;
             border: 1px solid #e2e8f0;
         }
-
         .input-area {
             background: white;
             padding: 16px 20px 20px;
@@ -201,12 +137,10 @@
             flex-direction: column;
             gap: 12px;
         }
-
         .text-input-row {
             display: flex;
             gap: 12px;
         }
-
         #textInput {
             flex: 1;
             padding: 12px;
@@ -214,7 +148,6 @@
             border-radius: 32px;
             outline: none;
         }
-
         .send-btn, .voice-btn {
             border: none;
             border-radius: 40px;
@@ -222,37 +155,33 @@
             font-weight: bold;
             cursor: pointer;
         }
-
-        .send-btn {
-            background: #3b6eff;
-            color: white;
+        .send-btn { background: #3b6eff; color: white; }
+        .voice-btn { background: #ff7b5c; color: white; width: 80%; margin: 0 auto; }
+        .voice-selector {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-size: 0.8rem;
+            color: #2c3e4e;
+            margin-top: 6px;
         }
-
-        .voice-btn {
-            background: #ff7b5c;
-            color: white;
-            width: 80%;
-            margin: 0 auto;
+        .voice-selector select {
+            padding: 6px 10px;
+            border-radius: 20px;
+            border: 1px solid #ccc;
+            background: #f9f9f9;
         }
-
         .status {
             font-size: 0.75rem;
             text-align: center;
             color: #2c3e4e;
         }
+        button:disabled { opacity: 0.5; }
 
-        button:disabled {
-            opacity: 0.5;
-        }
-
-        /* 手机适配 */
         @media (max-width:768px) {
             body { padding: 0; }
-            .app-container {
-                width: 100vw;
-                height: 100vh;
-                border-radius: 0;
-            }
+            .app-container { width: 100vw; height: 100vh; border-radius: 0; }
             .sessions-sidebar {
                 position: absolute;
                 left: -85%;
@@ -264,12 +193,8 @@
                 background: #223243;
                 box-shadow: 4px 0 20px rgba(0,0,0,0.35);
             }
-            .sessions-sidebar.show {
-                left: 0;
-            }
-            .chat-area {
-                width: 100%;
-            }
+            .sessions-sidebar.show { left: 0; }
+            .chat-area { width: 100%; }
             #menuBtn {
                 display: block;
                 background: rgba(255,255,255,0.15);
@@ -282,28 +207,16 @@
                 margin-right: 10px;
                 cursor: pointer;
             }
-            .chat-header {
-                font-size: 1rem;
-            }
-            .message {
-                max-width: 92%;
-                font-size: 0.95rem;
-            }
-            .voice-btn {
-                width: 100%;
-            }
-            .input-area {
-                padding-bottom: 28px;
-            }
+            .chat-header { font-size: 1rem; }
+            .message { max-width: 92%; font-size: 0.95rem; }
+            .voice-btn { width: 100%; }
+            .input-area { padding-bottom: 28px; }
         }
     </style>
 </head>
-
 <body>
 
 <div class="app-container">
-
-    <!-- 左侧历史栏 -->
     <div class="sessions-sidebar">
         <div class="sessions-header">
             <span>💬 历史对话</span>
@@ -311,8 +224,6 @@
         </div>
         <div class="sessions-list" id="sessionsList">加载中...</div>
     </div>
-
-    <!-- 聊天区域 -->
     <div class="chat-area">
         <div class="chat-header">
             <button id="menuBtn">☰</button>
@@ -327,18 +238,21 @@
                 <button class="send-btn" id="sendTextBtn">发送</button>
             </div>
             <button class="voice-btn" id="voiceBtn">🎤 按住 说话</button>
+            <div class="voice-selector">
+                <span>语音音色：</span>
+                <select id="voiceSelect"></select>
+            </div>
             <div class="status" id="statusMsg">✅ 在线 | 支持打断</div>
         </div>
     </div>
-
 </div>
 
 <script>
 (function() {
-
     const USER_ID = 'web_user';
     let currentSessionId = null;
     let currentAudio = null;
+    let currentVoice = localStorage.getItem('preferred_voice') || 'zh-CN-XiaoxiaoNeural';
 
     const messageBox = document.getElementById('messageBox');
     const textInput = document.getElementById('textInput');
@@ -347,6 +261,7 @@
     const statusSpan = document.getElementById('statusMsg');
     const sessionsListDiv = document.getElementById('sessionsList');
     const newSessionBtn = document.getElementById('newSessionBtn');
+    const voiceSelect = document.getElementById('voiceSelect');
 
     // 菜单
     const menuBtn = document.getElementById('menuBtn');
@@ -362,11 +277,11 @@
         }
     });
 
-    // 主动问候系统（20秒）
+    // 主动问候定时器 20秒
     let idleTimer = null;
     let lastGreetingTime = 0;
     const IDLE_SECONDS = 20;
-    const GREETING_COOLDOWN = 60 * 1000; // 该变量已不再使用，可保留或移除
+    const GREETING_COOLDOWN = 60 * 1000;
 
     function escapeHtml(str) {
         return str.replace(/[&<>]/g, (m) => (m === '&' ? '&amp;' : (m === '<' ? '&lt;' : '&gt;')));
@@ -380,27 +295,14 @@
         messageBox.scrollTop = messageBox.scrollHeight;
     }
 
-    // *** 修改点：去掉冷却检查，每次20秒空闲都触发问候 ***
     async function triggerGreeting() {
         if (currentAudio || sendBtn.disabled) return;
-        // 不再进行冷却限制，直接播报问候
+        const now = Date.now();
+        if (now - lastGreetingTime < GREETING_COOLDOWN) return;
+        lastGreetingTime = now;
         const greeting = "你好呀，我在这里，有什么想聊的吗？";
         addAIMessage(greeting);
-        try {
-            const ttsRes = await fetch('/chat/text-to-speech', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: greeting })
-            });
-            const ttsData = await ttsRes.json();
-            if (ttsData.audio_response) {
-                stopCurrentAudio();
-                const audio = new Audio(`data:audio/mp3;base64,${ttsData.audio_response}`);
-                currentAudio = audio;
-                audio.play();
-                audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
-            }
-        } catch(e) { console.error(e); }
+        await playTTS(greeting, currentVoice);
     }
 
     function resetIdleTimer() {
@@ -412,12 +314,56 @@
         resetIdleTimer();
     }
 
-    // 音频
     function stopCurrentAudio() {
         if (currentAudio) {
             currentAudio.pause();
             currentAudio.currentTime = 0;
             currentAudio = null;
+        }
+    }
+
+    // 加载音色列表
+    async function loadVoices() {
+        try {
+            const res = await fetch('/voices');
+            const data = await res.json();
+            const voices = data.voices;
+            voiceSelect.innerHTML = '';
+            for (const v of voices) {
+                const option = document.createElement('option');
+                option.value = v.name;
+                option.textContent = v.display;
+                if (v.name === currentVoice) option.selected = true;
+                voiceSelect.appendChild(option);
+            }
+            voiceSelect.addEventListener('change', () => {
+                currentVoice = voiceSelect.value;
+                localStorage.setItem('preferred_voice', currentVoice);
+                onUserActivity();
+            });
+        } catch (err) {
+            console.error('加载音色失败', err);
+        }
+    }
+
+    // TTS 播放
+    async function playTTS(text, voice) {
+        try {
+            const res = await fetch('/chat/text-to-speech', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voice })
+            });
+            const data = await res.json();
+            if (data.audio_response) {
+                stopCurrentAudio();
+                const audio = new Audio(`data:audio/mp3;base64,${data.audio_response}`);
+                currentAudio = audio;
+                audio.play();
+                audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
+            }
+        } catch (e) {
+            console.error('TTS 播放失败', e);
         }
     }
 
@@ -446,7 +392,7 @@
             }
             sessionsListDiv.innerHTML = html;
 
-            // 绑定删除按钮事件
+            // 绑定删除按钮
             document.querySelectorAll('.delete-session').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     e.stopPropagation();
@@ -463,7 +409,7 @@
                 });
             });
 
-            // 绑定会话点击事件
+            // 绑定会话点击
             document.querySelectorAll('.session-item').forEach(item => {
                 item.addEventListener('click', (e) => {
                     if (e.target.classList.contains('delete-session')) return;
@@ -500,7 +446,6 @@
         }
     }
 
-    // 新建会话
     async function createNewSession() {
         try {
             const res = await fetch('/session/new', {
@@ -522,7 +467,6 @@
         createNewSession();
     });
 
-    // 发送消息
     async function sendMessage(userText) {
         if (!userText.trim()) return;
         if (!currentSessionId) await createNewSession();
@@ -540,19 +484,7 @@
             const chatData = await chatRes.json();
             const aiText = chatData.response;
             await loadSessionMessages(currentSessionId);
-            const ttsRes = await fetch('/chat/text-to-speech', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: aiText })
-            });
-            const ttsData = await ttsRes.json();
-            if (ttsData.audio_response) {
-                stopCurrentAudio();
-                const audio = new Audio(`data:audio/mp3;base64,${ttsData.audio_response}`);
-                currentAudio = audio;
-                audio.play();
-                audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
-            }
+            await playTTS(aiText, currentVoice);
             statusSpan.innerHTML = '✅ 回复完成';
         } catch (err) {
             console.error(err);
@@ -564,9 +496,7 @@
         onUserActivity();
     }
 
-    sendBtn.addEventListener('click', () => {
-        sendMessage(textInput.value.trim());
-    });
+    sendBtn.addEventListener('click', () => sendMessage(textInput.value.trim()));
     textInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') sendMessage(textInput.value.trim());
     });
@@ -581,18 +511,14 @@
         recognition.lang = 'zh-CN';
         recognition.continuous = false;
         recognition.interimResults = false;
-        recognition.onstart = () => {
-            isListening = true;
-            statusSpan.innerHTML = '🔴 正在听...';
-        };
-        recognition.onend = () => {
-            isListening = false;
-        };
+        recognition.onstart = () => { isListening = true; statusSpan.innerHTML = '🔴 正在听...'; };
+        recognition.onend = () => { isListening = false; };
         recognition.onresult = async (e) => {
             const text = e.results[0][0].transcript;
             statusSpan.innerHTML = `📝 ${text}`;
             await sendMessage(text);
         };
+        recognition.onerror = () => { statusSpan.innerHTML = '❌ 识别失败'; };
     } else if (isAndroidApp) {
         statusSpan.innerHTML = '✅ 安卓语音模式';
     }
@@ -618,7 +544,8 @@
     voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startListen(); });
     voiceBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopListen(); });
 
-    // 启动
+    // 初始化
+    loadVoices();
     resetIdleTimer();
     loadSessions();
 })();
