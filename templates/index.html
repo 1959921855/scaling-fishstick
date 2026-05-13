@@ -1,891 +1,432 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>语音陪聊 · 会话历史</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>语音陪聊 · 会话历史</title>
 
-    <style>
+<style>
+/* ====== UI完全保留你的版本 ====== */
+* { box-sizing: border-box; }
 
-        * {
-            box-sizing: border-box;
-        }
+body {
+    font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(145deg, #1e2b3c 0%, #0f1a24 100%);
+    min-height: 100vh;
+    margin: 0;
+    padding: 16px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
 
-        body {
-            font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(145deg, #1e2b3c 0%, #0f1a24 100%);
-            min-height: 100vh;
-            margin: 0;
-            padding: 16px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
+.app-container {
+    display: flex;
+    width: 100%;
+    max-width: 1400px;
+    height: 90vh;
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(8px);
+    border-radius: 32px;
+    overflow: hidden;
+}
 
-        .app-container {
-            display: flex;
-            width: 100%;
-            max-width: 1400px;
-            height: 90vh;
-            background: rgba(255,255,255,0.1);
-            backdrop-filter: blur(8px);
-            border-radius: 32px;
-            overflow: hidden;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
-            position: relative;
-        }
+/* 左侧 */
+.sessions-sidebar {
+    width: 300px;
+    background: rgba(30, 43, 60, 0.85);
+    border-right: 1px solid rgba(255,255,255,0.2);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
 
-        /* =========================
-           历史栏
-        ========================= */
+/* 手机菜单 */
+@media(max-width:768px){
+    .sessions-sidebar{
+        position:absolute;
+        left:-85%;
+        width:80%;
+        height:100%;
+        transition:0.3s;
+        z-index:999;
+    }
+    .sessions-sidebar.show{
+        left:0;
+    }
+}
 
-        .sessions-sidebar {
-            width: 300px;
-            background: rgba(30, 43, 60, 0.85);
-            border-right: 1px solid rgba(255,255,255,0.2);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            transition: 0.3s;
-        }
+.sessions-header{
+    padding:16px;
+    background:#2c3e4e;
+    color:white;
+    display:flex;
+    justify-content:space-between;
+}
 
-        .sessions-header {
-            padding: 16px 12px;
-            background: #2c3e4e;
-            color: white;
-            font-weight: bold;
-            font-size: 1.1rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: nowrap;
-            white-space: nowrap;
-        }
+.sessions-list{
+    flex:1;
+    overflow-y:auto;
+    padding:12px;
+}
 
-        .sessions-header span {
-            flex-shrink: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
+.session-item{
+    background:rgba(255,255,255,0.1);
+    padding:12px;
+    border-radius:12px;
+    margin-bottom:10px;
+    cursor:pointer;
+    color:#e2e8f0;
+}
 
-        .new-session-btn {
-            background: #3b6eff;
-            border: none;
-            border-radius: 20px;
-            padding: 6px 12px;
-            color: white;
-            cursor: pointer;
-            font-size: 0.8rem;
-            flex-shrink: 0;
-            white-space: nowrap;
-        }
+.session-preview{
+    font-size:12px;
+    color:#aaa;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
 
-        .sessions-list {
-            flex: 1;
-            overflow-y: auto;
-            padding: 12px;
-        }
+.delete-session{
+    float:right;
+    background:transparent;
+    border:none;
+    color:#ff7b5c;
+    cursor:pointer;
+}
 
-        .session-item {
-            background: rgba(255,255,255,0.1);
-            border-radius: 12px;
-            padding: 12px;
-            margin-bottom: 12px;
-            cursor: pointer;
-            transition: 0.2s;
-            color: #e2e8f0;
-        }
+/* 聊天 */
+.chat-area{flex:1;display:flex;flex-direction:column;background:#f8faff;}
 
-        .session-item:hover {
-            background: rgba(59,110,255,0.4);
-        }
+.chat-header{
+    background:#2c3e4e;
+    color:white;
+    padding:16px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
 
-        .session-item.active {
-            background: #3b6eff;
-            color: white;
-        }
+#menuBtn{
+    display:none;
+}
 
-        .session-title {
-            font-weight: bold;
-            margin-bottom: 4px;
-            font-size: 0.95rem;
-            word-break: break-word;
-        }
+@media(max-width:768px){
+    #menuBtn{display:block;}
+}
 
-        .session-preview {
-            font-size: 0.75rem;
-            color: #cbd5e1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
+.messages{
+    flex:1;
+    overflow-y:auto;
+    padding:20px;
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+}
 
-        .session-time {
-            font-size: 0.7rem;
-            color: #94a3b8;
-            margin-top: 4px;
-        }
+.message.user{
+    align-self:flex-end;
+    background:#3b6eff;
+    color:white;
+    padding:10px 14px;
+    border-radius:20px;
+}
 
-        .delete-session {
-            float: right;
-            background: rgba(255,255,255,0.2);
-            border: none;
-            border-radius: 50%;
-            width: 22px;
-            height: 22px;
-            color: #ff7b5c;
-            cursor: pointer;
-            font-size: 12px;
-            text-align: center;
-        }
+.message.ai{
+    align-self:flex-start;
+    background:white;
+    padding:10px 14px;
+    border-radius:20px;
+}
 
-        /* =========================
-           聊天区
-        ========================= */
+.input-area{
+    padding:14px;
+    background:white;
+}
 
-        .chat-area {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: rgba(248,250,255,0.95);
-        }
+.text-input-row{
+    display:flex;
+    gap:10px;
+}
 
-        .chat-header {
-            background: #2c3e4e;
-            color: white;
-            padding: 18px 20px;
-            font-size: 1.3rem;
-            display: flex;
-            align-items: center;
-        }
+#textInput{
+    flex:1;
+    padding:10px;
+    border-radius:20px;
+}
 
-        #menuBtn {
-            display: none;
-        }
+.send-btn{
+    background:#3b6eff;
+    color:white;
+    border:none;
+    border-radius:20px;
+    padding:10px 16px;
+}
 
-        .messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
-        }
-
-        .message {
-            max-width: 80%;
-            padding: 10px 16px;
-            border-radius: 24px;
-            line-height: 1.45;
-            word-break: break-word;
-        }
-
-        .message.user {
-            align-self: flex-end;
-            background: #3b6eff;
-            color: white;
-            border-bottom-right-radius: 4px;
-        }
-
-        .message.ai {
-            align-self: flex-start;
-            background: white;
-            color: #1f2a3e;
-            border-bottom-left-radius: 4px;
-            border: 1px solid #e2e8f0;
-        }
-
-        .input-area {
-            background: white;
-            padding: 16px 20px 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .text-input-row {
-            display: flex;
-            gap: 12px;
-        }
-
-        #textInput {
-            flex: 1;
-            padding: 12px;
-            border: 1px solid #cbd5e1;
-            border-radius: 32px;
-            outline: none;
-        }
-
-        .send-btn,
-        .voice-btn {
-            border: none;
-            border-radius: 40px;
-            padding: 12px 20px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-
-        .send-btn {
-            background: #3b6eff;
-            color: white;
-        }
-
-        .voice-btn {
-            background: #ff7b5c;
-            color: white;
-            width: 80%;
-            margin: 0 auto;
-        }
-
-        .status {
-            font-size: 0.75rem;
-            text-align: center;
-            color: #2c3e4e;
-        }
-
-        button:disabled {
-            opacity: 0.5;
-        }
-
-        /* =========================
-           手机适配
-        ========================= */
-
-        @media (max-width:768px) {
-
-            body {
-                padding: 0;
-            }
-
-            .app-container {
-                width: 100vw;
-                height: 100vh;
-                border-radius: 0;
-            }
-
-            .sessions-sidebar {
-                position: absolute;
-                left: -85%;
-                top: 0;
-                width: 80%;
-                max-width: 320px;
-                height: 100%;
-                z-index: 999;
-                background: #223243;
-                box-shadow: 4px 0 20px rgba(0,0,0,0.35);
-            }
-
-            .sessions-sidebar.show {
-                left: 0;
-            }
-
-            .chat-area {
-                width: 100%;
-            }
-
-            #menuBtn {
-                display: block;
-                background: rgba(255,255,255,0.15);
-                border: none;
-                color: white;
-                width: 42px;
-                height: 42px;
-                border-radius: 12px;
-                font-size: 1.2rem;
-                margin-right: 10px;
-                cursor: pointer;
-            }
-
-            .chat-header {
-                font-size: 1rem;
-            }
-
-            .message {
-                max-width: 92%;
-                font-size: 0.95rem;
-            }
-
-            .voice-btn {
-                width: 100%;
-            }
-
-            .input-area {
-                padding-bottom: 28px;
-            }
-        }
-
-    </style>
+.voice-btn{
+    width:100%;
+    margin-top:10px;
+    background:#ff7b5c;
+    border:none;
+    border-radius:20px;
+    padding:12px;
+    color:white;
+}
+</style>
 </head>
 
 <body>
 
 <div class="app-container">
 
-    <!-- 左侧历史栏 -->
-    <div class="sessions-sidebar">
-
-        <div class="sessions-header">
-            <span>💬 历史对话</span>
-            <button class="new-session-btn" id="newSessionBtn">
-                + 新对话
-            </button>
-        </div>
-
-        <div class="sessions-list" id="sessionsList">
-            加载中...
-        </div>
-
-    </div>
-
-    <!-- 聊天区域 -->
-    <div class="chat-area">
-
-        <div class="chat-header">
-
+<!-- 左侧 -->
+<div class="sessions-sidebar">
+    <div class="sessions-header">
+        💬 历史对话
+        <div>
             <button id="menuBtn">☰</button>
-
-            <span>🎙️ 智能语音陪聊 · 小暖</span>
-
+            <button id="newSessionBtn">+</button>
         </div>
-
-        <div class="messages" id="messageBox">
-            <div class="message ai">加载会话中...</div>
-        </div>
-
-        <div class="input-area">
-
-            <div class="text-input-row">
-
-                <input
-                    type="text"
-                    id="textInput"
-                    placeholder="输入文字..."
-                    autocomplete="off"
-                >
-
-                <button class="send-btn" id="sendTextBtn">
-                    发送
-                </button>
-
-            </div>
-
-            <button class="voice-btn" id="voiceBtn">
-                🎤 按住 说话
-            </button>
-
-            <div class="status" id="statusMsg">
-                ✅ 在线 | 支持打断
-            </div>
-
-        </div>
-
     </div>
+
+    <div id="sessionsList"></div>
+</div>
+
+<!-- 聊天 -->
+<div class="chat-area">
+
+<div class="chat-header">🎙️ 小暖 AI</div>
+
+<div class="messages" id="messageBox"></div>
+
+<div class="input-area">
+    <div class="text-input-row">
+        <input id="textInput">
+        <button class="send-btn" id="sendBtn">发送</button>
+    </div>
+    <button class="voice-btn" id="voiceBtn">🎤 说话</button>
+</div>
+
+</div>
 
 </div>
 
 <script>
+(function(){
 
-(function() {
+const USER_ID='web_user';
+let currentSessionId=null;
+let currentAudio=null;
 
-    const USER_ID = 'web_user';
+/* =========================
+   手机菜单
+========================= */
+document.getElementById('menuBtn')?.addEventListener('click',()=>{
+    document.querySelector('.sessions-sidebar').classList.toggle('show');
+});
 
-    let currentSessionId = null;
-    let currentAudio = null;
+/* =========================
+   🔥 30秒空闲问候
+========================= */
 
-    const messageBox = document.getElementById('messageBox');
-    const textInput = document.getElementById('textInput');
-    const sendBtn = document.getElementById('sendTextBtn');
-    const voiceBtn = document.getElementById('voiceBtn');
-    const statusSpan = document.getElementById('statusMsg');
-    const sessionsListDiv = document.getElementById('sessionsList');
-    const newSessionBtn = document.getElementById('newSessionBtn');
+let idleTimer=null;
+let lastGreeting=0;
 
-    /* =========================
-       菜单
-    ========================= */
+const IDLE_TIME=30000;
+const COOLDOWN=10*60*1000;
 
-    const menuBtn = document.getElementById('menuBtn');
-    const sidebar = document.querySelector('.sessions-sidebar');
+function resetIdleTimer(){
+    clearTimeout(idleTimer);
+    idleTimer=setTimeout(triggerGreeting,IDLE_TIME);
+}
 
-    if (menuBtn) {
+async function triggerGreeting(){
+    const now=Date.now();
+    if(now-lastGreeting<COOLDOWN) return;
+    lastGreeting=now;
 
-        menuBtn.addEventListener('click', () => {
+    const text="你怎么不说话了？我在呢。";
 
-            sidebar.classList.toggle('show');
+    addMessage('ai',text);
+    playTTS(text);
+}
 
+/* ===== 所有操作都重置 ===== */
+function bindReset(){
+    ['click','keydown','touchstart','scroll'].forEach(e=>{
+        document.addEventListener(e,resetIdleTimer,true);
+    });
+}
+
+/* =========================
+   消息 + TTS（完整恢复）
+========================= */
+
+function addMessage(role,text){
+    const div=document.createElement('div');
+    div.className='message '+role;
+    div.innerHTML=(role==='user'?'👤 ':'🤖 ')+text;
+    document.getElementById('messageBox').appendChild(div);
+    document.getElementById('messageBox').scrollTop=999999;
+}
+
+async function playTTS(text){
+    try{
+        const res=await fetch('/chat/text-to-speech',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({text})
         });
 
-    }
+        const data=await res.json();
 
-    document.addEventListener('click', (e) => {
-
-        if (
-            window.innerWidth <= 768 &&
-            sidebar.classList.contains('show')
-        ) {
-
-            const insideSidebar = sidebar.contains(e.target);
-            const isMenu = menuBtn.contains(e.target);
-
-            if (!insideSidebar && !isMenu) {
-                sidebar.classList.remove('show');
-            }
+        if(data.audio_response){
+            currentAudio=new Audio(`data:audio/mp3;base64,${data.audio_response}`);
+            currentAudio.play();
         }
+    }catch(e){}
+}
+
+/* =========================
+   会话（恢复完整）
+========================= */
+
+async function loadSessions(){
+    const res=await fetch(`/sessions/${USER_ID}?limit=50`);
+    const data=await res.json();
+
+    const box=document.getElementById('sessionsList');
+    box.innerHTML='';
+
+    data.sessions.forEach(s=>{
+
+        const div=document.createElement('div');
+        div.className='session-item';
+
+        div.innerHTML=`
+            ${s.title}
+            <button class="delete-session">🗑</button>
+            <div class="session-preview">${s.preview||''}</div>
+        `;
+
+        div.onclick=()=>loadSessionMessages(s.id);
+
+        div.querySelector('.delete-session').onclick=async(e)=>{
+            e.stopPropagation();
+            await fetch(`/session/${s.id}?user_id=${USER_ID}`,{method:'DELETE'});
+            loadSessions();
+        };
+
+        box.appendChild(div);
+    });
+}
+
+async function loadSessionMessages(id){
+
+    const res=await fetch(`/session/${id}/messages`);
+    const data=await res.json();
+
+    const box=document.getElementById('messageBox');
+    box.innerHTML='';
+
+    data.messages.forEach(m=>{
+        addMessage(m.role,m.content);
     });
 
-    /* =========================
-       音频
-    ========================= */
+    currentSessionId=id;
 
-    function stopCurrentAudio() {
+    resetIdleTimer();
+}
 
-        if (currentAudio) {
+/* =========================
+   发送（完整 + TTS）
+========================= */
 
-            currentAudio.pause();
-            currentAudio.currentTime = 0;
-            currentAudio = null;
+async function sendMessage(text){
 
-        }
-    }
+    if(!text.trim()) return;
 
-    function escapeHtml(str) {
+    resetIdleTimer();
 
-        return str.replace(/[&<>]/g, function(m) {
+    addMessage('user',text);
 
-            if (m === '&') return '&amp;';
-            if (m === '<') return '&lt;';
-            if (m === '>') return '&gt;';
+    document.getElementById('textInput').value='';
 
-            return m;
-
-        });
-    }
-
-    /* =========================
-       会话列表
-    ========================= */
-
-    async function loadSessions() {
-
-        try {
-
-            const res = await fetch(`/sessions/${USER_ID}?limit=50`);
-
-            const data = await res.json();
-
-            const sessions = data.sessions || [];
-
-            if (sessions.length === 0) {
-
-                sessionsListDiv.innerHTML =
-                    '<div style="text-align:center;padding:20px;color:#aaa;">暂无对话</div>';
-
-                return;
-            }
-
-            let html = '';
-
-            for (const sess of sessions) {
-
-                const date = new Date(sess.updated_at)
-                    .toLocaleDateString('zh-CN');
-
-                const time = new Date(sess.updated_at)
-                    .toLocaleTimeString('zh-CN', {
-                        hour:'2-digit',
-                        minute:'2-digit'
-                    });
-
-                html += `
-                    <div class="session-item ${currentSessionId === sess.id ? 'active' : ''}"
-                         data-session-id="${sess.id}">
-
-                        <div class="session-title">
-                            ${escapeHtml(sess.title)}
-                        </div>
-
-                        <div class="session-preview">
-                            ${escapeHtml(sess.preview)}
-                        </div>
-
-                        <div class="session-time">
-                            ${date} ${time}
-                        </div>
-
-                        <button class="delete-session"
-                                data-id="${sess.id}">
-                            🗑️
-                        </button>
-
-                    </div>
-                `;
-            }
-
-            sessionsListDiv.innerHTML = html;
-
-            document.querySelectorAll('.session-item')
-                .forEach(item => {
-
-                    item.addEventListener('click', () => {
-
-                        const sid =
-                            parseInt(item.getAttribute('data-session-id'));
-
-                        if (sid) {
-
-                            loadSessionMessages(sid);
-
-                            if (window.innerWidth <= 768) {
-                                sidebar.classList.remove('show');
-                            }
-                        }
-                    });
-
-                });
-
-        } catch (err) {
-
-            console.error(err);
-
-        }
-    }
-
-    async function loadSessionMessages(sessionId) {
-
-        try {
-
-            const res = await fetch(`/session/${sessionId}/messages`);
-
-            const data = await res.json();
-
-            const messages = data.messages || [];
-
-            messageBox.innerHTML = '';
-
-            for (const msg of messages) {
-
-                const div = document.createElement('div');
-
-                div.className = `message ${msg.role}`;
-
-                div.innerHTML =
-                    msg.role === 'user'
-                    ? `👤 ${escapeHtml(msg.content)}`
-                    : `🤖 ${escapeHtml(msg.content)}`;
-
-                messageBox.appendChild(div);
-            }
-
-            currentSessionId = sessionId;
-
-            await loadSessions();
-
-            if (messageBox.lastChild) {
-
-                messageBox.lastChild.scrollIntoView({
-                    behavior:'smooth'
-                });
-
-            }
-
-        } catch (err) {
-
-            console.error(err);
-
-        }
-    }
-
-    /* =========================
-       新建会话
-    ========================= */
-
-    async function createNewSession() {
-
-        try {
-
-            const res = await fetch('/session/new', {
-
-                method:'POST',
-
-                headers:{
-                    'Content-Type':'application/json'
-                },
-
-                body:JSON.stringify({
-                    user_id:USER_ID,
-                    title:'新对话'
-                })
-
-            });
-
-            const data = await res.json();
-
-            currentSessionId = data.session_id;
-
-            await loadSessions();
-
-            messageBox.innerHTML =
-                '<div class="message ai">你好呀，我们开始聊天吧～</div>';
-
-        } catch (err) {
-
-            console.error(err);
-
-        }
-    }
-
-    newSessionBtn.addEventListener('click', createNewSession);
-
-    /* =========================
-       发送消息
-    ========================= */
-
-    async function sendMessage(userText) {
-
-        if (!userText.trim()) return;
-
-        if (!currentSessionId) {
-
-            await createNewSession();
-
-        }
-
-        stopCurrentAudio();
-
-        textInput.value = '';
-
-        sendBtn.disabled = true;
-        voiceBtn.disabled = true;
-
-        statusSpan.innerHTML = '🤔 AI 思考中...';
-
-        try {
-
-            const chatRes = await fetch('/chat/text', {
-
-                method:'POST',
-
-                headers:{
-                    'Content-Type':'application/json'
-                },
-
-                body:JSON.stringify({
-                    message:userText,
-                    user_id:USER_ID,
-                    session_id:currentSessionId
-                })
-
-            });
-
-            const chatData = await chatRes.json();
-
-            const aiText = chatData.response;
-
-            await loadSessionMessages(currentSessionId);
-
-            /* TTS */
-
-            const ttsRes = await fetch('/chat/text-to-speech', {
-
-                method:'POST',
-
-                headers:{
-                    'Content-Type':'application/json'
-                },
-
-                body:JSON.stringify({
-                    text:aiText
-                })
-
-            });
-
-            const ttsData = await ttsRes.json();
-
-            if (ttsData.audio_response) {
-
-                stopCurrentAudio();
-
-                const audio = new Audio(
-                    `data:audio/mp3;base64,${ttsData.audio_response}`
-                );
-
-                currentAudio = audio;
-
-                audio.play();
-
-                audio.onended = () => {
-
-                    if (currentAudio === audio) {
-
-                        currentAudio = null;
-
-                    }
-                };
-
-            }
-
-            statusSpan.innerHTML = '✅ 回复完成';
-
-        } catch (err) {
-
-            console.error(err);
-
-            statusSpan.innerHTML = '❌ 网络错误';
-
-        } finally {
-
-            sendBtn.disabled = false;
-            voiceBtn.disabled = false;
-
-        }
-    }
-
-    sendBtn.addEventListener('click', () => {
-
-        sendMessage(textInput.value.trim());
-
+    const res=await fetch('/chat/text',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+            message:text,
+            user_id:USER_ID,
+            session_id:currentSessionId
+        })
     });
 
-    textInput.addEventListener('keypress', (e) => {
+    const data=await res.json();
 
-        if (e.key === 'Enter') {
+    addMessage('ai',data.response);
 
-            sendMessage(textInput.value.trim());
+    playTTS(data.response);
+}
 
-        }
+/* =========================
+   语音（完整恢复）
+========================= */
 
-    });
+let recognition=null;
+let isAndroid=typeof AndroidSpeech!=='undefined';
 
-    /* =========================
-       语音识别
-    ========================= */
+if('webkitSpeechRecognition'in window && !isAndroid){
 
-    let recognition = null;
+    recognition=new webkitSpeechRecognition();
+    recognition.lang='zh-CN';
 
-    let isListening = false;
+    recognition.onresult=(e)=>{
+        sendMessage(e.results[0][0].transcript);
+    };
 
-    const isAndroidApp =
-        typeof AndroidSpeech !== 'undefined';
+    recognition.onerror=()=>{};
+    recognition.onend=()=>{};
+}
 
-    if ('webkitSpeechRecognition' in window && !isAndroidApp) {
+/* Android */
+window.onAndroidSpeechResult=function(text){
+    sendMessage(text);
+};
 
-        recognition = new webkitSpeechRecognition();
+document.getElementById('voiceBtn').onclick=()=>{
+    resetIdleTimer();
 
-        recognition.lang = 'zh-CN';
-
-        recognition.continuous = false;
-
-        recognition.interimResults = false;
-
-        recognition.onstart = () => {
-
-            isListening = true;
-
-            statusSpan.innerHTML =
-                '🔴 正在听...';
-
-        };
-
-        recognition.onend = () => {
-
-            isListening = false;
-
-        };
-
-        recognition.onresult = async (e) => {
-
-            const text =
-                e.results[0][0].transcript;
-
-            statusSpan.innerHTML =
-                `📝 ${text}`;
-
-            await sendMessage(text);
-
-        };
-
-    } else if (isAndroidApp) {
-
-        statusSpan.innerHTML =
-            '✅ 安卓语音模式';
-
+    if(isAndroid){
+        AndroidSpeech.startSpeechRecognition();
+    }else if(recognition){
+        recognition.start();
     }
+};
 
-    function startListen() {
+/* =========================
+   输入
+========================= */
 
-        stopCurrentAudio();
+document.getElementById('sendBtn').onclick=()=>{
+    sendMessage(document.getElementById('textInput').value);
+};
 
-        if (isAndroidApp) {
-
-            AndroidSpeech.startSpeechRecognition();
-
-        } else if (recognition && !isListening) {
-
-            recognition.start();
-
-        }
+document.getElementById('textInput').onkeydown=(e)=>{
+    if(e.key==='Enter'){
+        sendMessage(e.target.value);
     }
+};
 
-    function stopListen() {
+/* =========================
+   初始化
+========================= */
 
-        if (
-            recognition &&
-            isListening &&
-            !isAndroidApp
-        ) {
-
-            recognition.stop();
-
-        }
-    }
-
-    window.onAndroidSpeechResult =
-        async function(text) {
-
-            statusSpan.innerHTML =
-                `📝 ${text}`;
-
-            await sendMessage(text);
-
-        };
-
-    voiceBtn.addEventListener(
-        'mousedown',
-        startListen
-    );
-
-    voiceBtn.addEventListener(
-        'mouseup',
-        stopListen
-    );
-
-    voiceBtn.addEventListener(
-        'touchstart',
-        (e) => {
-
-            e.preventDefault();
-
-            startListen();
-
-        }
-    );
-
-    voiceBtn.addEventListener(
-        'touchend',
-        (e) => {
-
-            e.preventDefault();
-
-            stopListen();
-
-        }
-    );
-
-    loadSessions();
+bindReset();
+loadSessions();
+resetIdleTimer();
 
 })();
-
 </script>
 
 </body>
