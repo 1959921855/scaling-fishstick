@@ -148,7 +148,7 @@
             border-radius: 32px;
             outline: none;
         }
-        .send-btn, .voice-btn {
+        .send-btn, .voice-btn, .call-btn {
             border: none;
             border-radius: 40px;
             padding: 12px 20px;
@@ -157,6 +157,15 @@
         }
         .send-btn { background: #3b6eff; color: white; }
         .voice-btn { background: #ff7b5c; color: white; width: 80%; margin: 0 auto; }
+        .call-btn {
+            background: #4caf50;
+            color: white;
+            width: 80%;
+            margin: 8px auto 0;
+        }
+        .call-btn.active {
+            background: #f44336;
+        }
         .voice-selector {
             display: flex;
             align-items: center;
@@ -209,7 +218,7 @@
             }
             .chat-header { font-size: 1rem; }
             .message { max-width: 92%; font-size: 0.95rem; }
-            .voice-btn { width: 100%; }
+            .voice-btn, .call-btn { width: 100%; }
             .input-area { padding-bottom: 28px; }
         }
     </style>
@@ -238,6 +247,7 @@
                 <button class="send-btn" id="sendTextBtn">发送</button>
             </div>
             <button class="voice-btn" id="voiceBtn">🎤 按住 说话</button>
+            <button class="call-btn" id="callBtn">📞 语音通话</button>
             <div class="voice-selector">
                 <span>语音音色：</span>
                 <select id="voiceSelect"></select>
@@ -254,10 +264,16 @@
     let currentAudio = null;
     let currentVoice = localStorage.getItem('preferred_voice') || 'zh-CN-XiaoxiaoNeural';
 
+    // 通话模式状态
+    let isCallMode = false;
+    let waitingForReply = false;
+    let callLoopActive = false;
+
     const messageBox = document.getElementById('messageBox');
     const textInput = document.getElementById('textInput');
     const sendBtn = document.getElementById('sendTextBtn');
     const voiceBtn = document.getElementById('voiceBtn');
+    const callBtn = document.getElementById('callBtn');
     const statusSpan = document.getElementById('statusMsg');
     const sessionsListDiv = document.getElementById('sessionsList');
     const newSessionBtn = document.getElementById('newSessionBtn');
@@ -277,11 +293,34 @@
         }
     });
 
-    // 主动问候定时器 20秒
+    // 主动问候定时器（通话模式下禁用）
     let idleTimer = null;
     let lastGreetingTime = 0;
     const IDLE_SECONDS = 20;
     const GREETING_COOLDOWN = 60 * 1000;
+
+    function resetIdleTimer() {
+        if (isCallMode) return;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+            if (!isCallMode) triggerGreeting();
+        }, IDLE_SECONDS * 1000);
+    }
+
+    async function triggerGreeting() {
+        if (isCallMode) return;
+        if (currentAudio || sendBtn.disabled) return;
+        const now = Date.now();
+        if (now - lastGreetingTime < GREETING_COOLDOWN) return;
+        lastGreetingTime = now;
+        const greeting = "你好呀，我在这里，有什么想聊的吗？";
+        addAIMessage(greeting);
+        await playTTS(greeting, currentVoice);
+    }
+
+    function onUserActivity() {
+        resetIdleTimer();
+    }
 
     function escapeHtml(str) {
         return str.replace(/[&<>]/g, (m) => (m === '&' ? '&amp;' : (m === '<' ? '&lt;' : '&gt;')));
@@ -295,59 +334,9 @@
         messageBox.scrollTop = messageBox.scrollHeight;
     }
 
-    async function triggerGreeting() {
-        if (currentAudio || sendBtn.disabled) return;
-        const now = Date.now();
-        if (now - lastGreetingTime < GREETING_COOLDOWN) return;
-        lastGreetingTime = now;
-        const greeting = "你好呀，我在这里，有什么想聊的吗？";
-        addAIMessage(greeting);
-        await playTTS(greeting, currentVoice);
-    }
-
-    function resetIdleTimer() {
-        if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => triggerGreeting(), IDLE_SECONDS * 1000);
-    }
-
-    function onUserActivity() {
-        resetIdleTimer();
-    }
-
-    function stopCurrentAudio() {
-        if (currentAudio) {
-            currentAudio.pause();
-            currentAudio.currentTime = 0;
-            currentAudio = null;
-        }
-    }
-
-    // 加载音色列表
-    async function loadVoices() {
-        try {
-            const res = await fetch('/voices');
-            const data = await res.json();
-            const voices = data.voices;
-            voiceSelect.innerHTML = '';
-            for (const v of voices) {
-                const option = document.createElement('option');
-                option.value = v.name;
-                option.textContent = v.display;
-                if (v.name === currentVoice) option.selected = true;
-                voiceSelect.appendChild(option);
-            }
-            voiceSelect.addEventListener('change', () => {
-                currentVoice = voiceSelect.value;
-                localStorage.setItem('preferred_voice', currentVoice);
-                onUserActivity();
-            });
-        } catch (err) {
-            console.error('加载音色失败', err);
-        }
-    }
-
-    // TTS 播放
+    // 播放 TTS，并在通话模式下设置 waitingForReply 和结束后自动循环
     async function playTTS(text, voice) {
+        if (!text) return;
         try {
             const res = await fetch('/chat/text-to-speech', {
                 method: 'POST',
@@ -356,18 +345,47 @@
             });
             const data = await res.json();
             if (data.audio_response) {
-                stopCurrentAudio();
+                if (currentAudio) {
+                    currentAudio.pause();
+                    currentAudio = null;
+                }
                 const audio = new Audio(`data:audio/mp3;base64,${data.audio_response}`);
                 currentAudio = audio;
+                if (isCallMode) waitingForReply = true;
                 audio.play();
-                audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
+                audio.onended = () => {
+                    if (currentAudio === audio) currentAudio = null;
+                    if (isCallMode) {
+                        waitingForReply = false;
+                        startCallLoop();
+                    }
+                };
+            } else if (isCallMode) {
+                // 无音频时也允许继续循环
+                waitingForReply = false;
+                startCallLoop();
             }
         } catch (e) {
             console.error('TTS 播放失败', e);
+            if (isCallMode) {
+                waitingForReply = false;
+                startCallLoop();
+            }
         }
     }
 
-    // 加载会话列表
+    // 通话模式核心：自动开始一次语音识别
+    function startCallLoop() {
+        if (!isCallMode) return;
+        if (callLoopActive) return;
+        if (waitingForReply) return;
+        if (recognition && isListening) return;
+        callLoopActive = true;
+        startListen();
+        callLoopActive = false;
+    }
+
+    // 会话相关函数（与原来相同）
     async function loadSessions() {
         try {
             const res = await fetch(`/sessions/${USER_ID}?limit=50`);
@@ -392,7 +410,6 @@
             }
             sessionsListDiv.innerHTML = html;
 
-            // 绑定删除按钮
             document.querySelectorAll('.delete-session').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     e.stopPropagation();
@@ -409,7 +426,6 @@
                 });
             });
 
-            // 绑定会话点击
             document.querySelectorAll('.session-item').forEach(item => {
                 item.addEventListener('click', (e) => {
                     if (e.target.classList.contains('delete-session')) return;
@@ -465,16 +481,28 @@
 
     newSessionBtn.addEventListener('click', () => {
         createNewSession();
+        if (isCallMode) {
+            waitingForReply = false;
+            startCallLoop();
+        }
     });
 
     async function sendMessage(userText) {
         if (!userText.trim()) return;
         if (!currentSessionId) await createNewSession();
-        stopCurrentAudio();
+
+        if (currentAudio) {
+            currentAudio.pause();
+            currentAudio = null;
+        }
+
+        if (isCallMode) waitingForReply = true;
+
         textInput.value = '';
         sendBtn.disabled = true;
         voiceBtn.disabled = true;
         statusSpan.innerHTML = '🤔 AI 思考中...';
+
         try {
             const chatRes = await fetch('/chat/text', {
                 method: 'POST',
@@ -489,16 +517,27 @@
         } catch (err) {
             console.error(err);
             statusSpan.innerHTML = '❌ 网络错误';
+            if (isCallMode) {
+                waitingForReply = false;
+                startCallLoop();
+            }
         } finally {
             sendBtn.disabled = false;
             voiceBtn.disabled = false;
+            if (!isCallMode) onUserActivity();
         }
-        onUserActivity();
+        if (!isCallMode) onUserActivity();
     }
 
-    sendBtn.addEventListener('click', () => sendMessage(textInput.value.trim()));
+    sendBtn.addEventListener('click', () => {
+        if (isCallMode) return;
+        sendMessage(textInput.value.trim());
+    });
     textInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendMessage(textInput.value.trim());
+        if (e.key === 'Enter') {
+            if (isCallMode) return;
+            sendMessage(textInput.value.trim());
+        }
     });
     textInput.addEventListener('input', onUserActivity);
 
@@ -506,48 +545,142 @@
     let recognition = null;
     let isListening = false;
     const isAndroidApp = typeof AndroidSpeech !== 'undefined';
-    if ('webkitSpeechRecognition' in window && !isAndroidApp) {
-        recognition = new webkitSpeechRecognition();
-        recognition.lang = 'zh-CN';
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        recognition.onstart = () => { isListening = true; statusSpan.innerHTML = '🔴 正在听...'; };
-        recognition.onend = () => { isListening = false; };
-        recognition.onresult = async (e) => {
-            const text = e.results[0][0].transcript;
-            statusSpan.innerHTML = `📝 ${text}`;
-            await sendMessage(text);
-        };
-        recognition.onerror = () => { statusSpan.innerHTML = '❌ 识别失败'; };
-    } else if (isAndroidApp) {
-        statusSpan.innerHTML = '✅ 安卓语音模式';
+
+    function initRecognition() {
+        if (recognition) return;
+        if ('webkitSpeechRecognition' in window && !isAndroidApp) {
+            recognition = new webkitSpeechRecognition();
+            recognition.lang = 'zh-CN';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.onstart = () => {
+                isListening = true;
+                statusSpan.innerHTML = '🔴 正在听...';
+            };
+            recognition.onend = () => {
+                isListening = false;
+                if (isCallMode && !waitingForReply && !callLoopActive) {
+                    startCallLoop();
+                }
+            };
+            recognition.onresult = async (e) => {
+                const text = e.results[0][0].transcript;
+                statusSpan.innerHTML = `📝 ${text}`;
+                await sendMessage(text);
+            };
+            recognition.onerror = (err) => {
+                console.error('识别错误', err);
+                statusSpan.innerHTML = '❌ 识别失败';
+                isListening = false;
+                if (isCallMode && !waitingForReply) {
+                    setTimeout(() => startCallLoop(), 1000);
+                }
+            };
+        }
     }
 
     function startListen() {
-        stopCurrentAudio();
-        onUserActivity();
+        if (isCallMode && waitingForReply) return;
         if (isAndroidApp) {
-            AndroidSpeech.startSpeechRecognition();
+            if (typeof AndroidSpeech !== 'undefined') {
+                AndroidSpeech.startSpeechRecognition();
+            } else {
+                statusSpan.innerHTML = '❌ 未检测到安卓语音接口';
+            }
         } else if (recognition && !isListening) {
             recognition.start();
         }
     }
+
     function stopListen() {
-        if (recognition && isListening && !isAndroidApp) recognition.stop();
+        if (recognition && isListening && !isAndroidApp) {
+            recognition.stop();
+        }
     }
+
     window.onAndroidSpeechResult = async (text) => {
         statusSpan.innerHTML = `📝 ${text}`;
         await sendMessage(text);
     };
-    voiceBtn.addEventListener('mousedown', startListen);
-    voiceBtn.addEventListener('mouseup', stopListen);
-    voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startListen(); });
-    voiceBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopListen(); });
+
+    voiceBtn.addEventListener('mousedown', () => {
+        if (isCallMode) return;
+        startListen();
+    });
+    voiceBtn.addEventListener('mouseup', () => {
+        if (isCallMode) return;
+        stopListen();
+    });
+    voiceBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (isCallMode) return;
+        startListen();
+    });
+    voiceBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        if (isCallMode) return;
+        stopListen();
+    });
+
+    // 通话按钮逻辑
+    callBtn.addEventListener('click', () => {
+        if (isCallMode) {
+            // 退出通话模式
+            isCallMode = false;
+            callBtn.textContent = '📞 语音通话';
+            callBtn.classList.remove('active');
+            voiceBtn.disabled = false;
+            voiceBtn.style.opacity = '1';
+            if (recognition && isListening) recognition.stop();
+            waitingForReply = false;
+            callLoopActive = false;
+            statusSpan.innerHTML = '✅ 通话结束 | 在线';
+            resetIdleTimer();
+        } else {
+            // 进入通话模式
+            isCallMode = true;
+            callBtn.textContent = '🔴 通话中...';
+            callBtn.classList.add('active');
+            voiceBtn.disabled = true;
+            voiceBtn.style.opacity = '0.5';
+            if (idleTimer) clearTimeout(idleTimer);
+            statusSpan.innerHTML = '📞 通话模式已开启，请开始说话...';
+            waitingForReply = false;
+            callLoopActive = false;
+            startCallLoop();
+        }
+        onUserActivity();
+    });
+
+    // 音色列表加载
+    async function loadVoices() {
+        try {
+            const res = await fetch('/voices');
+            const data = await res.json();
+            const voices = data.voices;
+            voiceSelect.innerHTML = '';
+            for (const v of voices) {
+                const option = document.createElement('option');
+                option.value = v.name;
+                option.textContent = v.display;
+                if (v.name === currentVoice) option.selected = true;
+                voiceSelect.appendChild(option);
+            }
+            voiceSelect.addEventListener('change', () => {
+                currentVoice = voiceSelect.value;
+                localStorage.setItem('preferred_voice', currentVoice);
+                onUserActivity();
+            });
+        } catch (err) {
+            console.error('加载音色失败', err);
+        }
+    }
 
     // 初始化
+    initRecognition();
     loadVoices();
-    resetIdleTimer();
     loadSessions();
+    resetIdleTimer();
 })();
 </script>
 </body>
