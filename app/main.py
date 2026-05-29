@@ -224,10 +224,10 @@ def get_relative_date(offset_days: int) -> str:
         label = f"{offset_days}天后"
     return f"{label}是{target.month}月{target.day}日，{weekday_str}。"
 
-# ========== 地名提取（强化版，排除问候语） ==========
+# ========== 地名提取（强化版，包含语气词排除） ==========
 WEATHER_KEYWORDS = {"天气", "温度", "气温"}
 
-# 扩大排除词集合，包含常见问候语和无意义词
+# 排除词集合：包含所有不可能作为城市名的词
 EXCLUDE_WORDS = {
     "现在", "请问", "知道", "那里", "这里", "什么", "今天", "明天", "后天", "昨日", "明日",
     "查询", "预报", "风力", "湿度", "气象", "几点", "时间", "日期", "星期几", "几号",
@@ -235,9 +235,12 @@ EXCLUDE_WORDS = {
     "是", "的", "了", "吗", "呢", "吧", "啊", "呀", "嘛", "哦", "嗯", "么",
     "一个", "一下", "一些", "这个", "那个", "哪个", "什么样", "如何", "多少",
     "当前", "咋样",
-    # 新增常见问候语
+    # 常见问候语
     "你好", "您好", "你们", "我们", "他们", "大家", "朋友", "帮忙", "一下",
-    "请", "能", "可以", "是否", "是不是", "为啥", "为何", "咋", "嘛", "咯"
+    "请", "能", "可以", "是否", "是不是", "为啥", "为何", "咋", "嘛", "咯",
+    # 语气词和疑问词
+    "到底", "啊啊", "呀", "哦", "噢", "嗯", "唔", "哈哈", "嘿嘿", "哎", "唉", "哟",
+    "啊", "啦", "呗", "嘛"
 }
 
 def clean_region(raw: str) -> str:
@@ -271,6 +274,8 @@ def extract_region_and_date(text: str) -> tuple[Optional[str], Optional[str]]:
     region = match.group(1) if match else None
     # 过滤排除词
     if region and region in EXCLUDE_WORDS:
+        region = None
+    if region and len(region) < 2:
         region = None
     return region, date_type
 
@@ -381,8 +386,7 @@ async def implicit_tool_call(user_msg: str) -> tuple[bool, str | None]:
         
         raw_region, date_type = extract_region_and_date(user_msg)
         region = clean_region(raw_region) if raw_region else None
-        
-        # 关键修改：如果提取到的 region 是排除词或 None，则默认南京
+        # 再次过滤排除词
         if region and region in EXCLUDE_WORDS:
             region = None
         if not region:
@@ -462,7 +466,7 @@ async def lifespan(app: FastAPI):
     yield
     await database.disconnect()
 
-app = FastAPI(title="语音陪聊智能体", version="6.8", lifespan=lifespan)
+app = FastAPI(title="语音陪聊智能体", version="6.9", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
 
