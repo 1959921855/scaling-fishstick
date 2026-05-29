@@ -105,7 +105,7 @@ TOOLS = [
     }
 ]
 
-# ========== 高德天气执行函数 ==========
+# ========== 高德天气执行函数（带行政区划过滤） ==========
 async def execute_tool(tool_name: str, arguments: dict) -> str:
     logger.info(f"[TOOL_CALL] 工具名称: {tool_name}, 参数: {arguments}")
     if tool_name == "get_weather":
@@ -224,23 +224,18 @@ def get_relative_date(offset_days: int) -> str:
         label = f"{offset_days}天后"
     return f"{label}是{target.month}月{target.day}日，{weekday_str}。"
 
-# ========== 地名提取（强化版，包含语气词排除） ==========
+# ========== 地名提取（强化版，排除语气词） ==========
 WEATHER_KEYWORDS = {"天气", "温度", "气温"}
 
-# 排除词集合：包含所有不可能作为城市名的词
 EXCLUDE_WORDS = {
     "现在", "请问", "知道", "那里", "这里", "什么", "今天", "明天", "后天", "昨日", "明日",
     "查询", "预报", "风力", "湿度", "气象", "几点", "时间", "日期", "星期几", "几号",
     "怎么", "怎样", "怎么样", "如何", "哪儿", "哪里", "哪", "什么样", "为何", "为什么",
     "是", "的", "了", "吗", "呢", "吧", "啊", "呀", "嘛", "哦", "嗯", "么",
     "一个", "一下", "一些", "这个", "那个", "哪个", "什么样", "如何", "多少",
-    "当前", "咋样",
-    # 常见问候语
-    "你好", "您好", "你们", "我们", "他们", "大家", "朋友", "帮忙", "一下",
-    "请", "能", "可以", "是否", "是不是", "为啥", "为何", "咋", "嘛", "咯",
-    # 语气词和疑问词
-    "到底", "啊啊", "呀", "哦", "噢", "嗯", "唔", "哈哈", "嘿嘿", "哎", "唉", "哟",
-    "啊", "啦", "呗", "嘛"
+    "当前", "咋样", "到底", "啊啊", "哈哈", "嘿嘿", "哎", "唉", "哟", "噢", "唔",
+    "你好", "您好", "你们", "我们", "他们", "大家", "朋友", "帮忙", "请", "能", "可以",
+    "是否", "是不是", "为啥", "为何", "咋", "嘛", "咯"
 }
 
 def clean_region(raw: str) -> str:
@@ -272,7 +267,6 @@ def extract_region_and_date(text: str) -> tuple[Optional[str], Optional[str]]:
         clean_text = clean_text.replace(kw, "")
     match = re.search(r"([\u4e00-\u9fa5]{2,})", clean_text)
     region = match.group(1) if match else None
-    # 过滤排除词
     if region and region in EXCLUDE_WORDS:
         region = None
     if region and len(region) < 2:
@@ -330,7 +324,7 @@ async def get_temperature_for_date(city: str, date_type: str, temp_type: str) ->
         temp = fc.get('nighttemp', '?')
         return f"{formatted_address}{day_label}的最低温度是 {temp}℃。"
 
-# ========== 核心隐式调用（年份、日期、天气） ==========
+# ========== 核心隐式调用（支持多日期天气） ==========
 async def implicit_tool_call(user_msg: str) -> tuple[bool, str | None]:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
@@ -376,7 +370,7 @@ async def implicit_tool_call(user_msg: str) -> tuple[bool, str | None]:
             else:
                 return True, f"今天是{now.year}年{now.month}月{now.day}日，{weekdays[now.weekday()]}。"
 
-    # 1. 天气相关
+    # 1. 天气
     if any(kw in user_msg for kw in WEATHER_KEYWORDS):
         temp_type = None
         if "最低温度" in user_msg or "最低气温" in user_msg:
@@ -384,26 +378,55 @@ async def implicit_tool_call(user_msg: str) -> tuple[bool, str | None]:
         elif "最高温度" in user_msg or "最高气温" in user_msg:
             temp_type = "max"
         
-        raw_region, date_type = extract_region_and_date(user_msg)
+        raw_region, _ = extract_region_and_date(user_msg)
         region = clean_region(raw_region) if raw_region else None
-        # 再次过滤排除词
         if region and region in EXCLUDE_WORDS:
             region = None
         if not region:
             region = "南京"
-        if not date_type:
-            date_type = "today"
         
+        # 检测多个日期
+        date_map = {"今天": "today", "明天": "tomorrow", "后天": "dayafter"}
+        found_dates = [kw for kw in date_map.keys() if kw in user_msg]
+        
+        # 如果是最高/最低温度，不支持多日期，只取第一个
         if temp_type:
+            date_type = "today"
+            for kw in date_map:
+                if kw in user_msg:
+                    date_type = date_map[kw]
+                    break
             result = await get_temperature_for_date(region, date_type, temp_type)
             if "未找到城市" in result and region != "南京":
                 result = await get_temperature_for_date("南京", date_type, temp_type)
             return True, result
         
-        result = await execute_tool("get_weather", {"city": region, "date": date_type})
-        if "未找到城市" in result and region != "南京":
-            result = await execute_tool("get_weather", {"city": "南京", "date": date_type})
-        return True, result
+        # 普通天气：支持多日期
+        if len(found_dates) > 1:
+            results = []
+            for d in found_dates:
+                dt = date_map[d]
+                res = await execute_tool("get_weather", {"city": region, "date": dt})
+                if "未找到" not in res and "错误" not in res and "不可用" not in res:
+                    results.append(res)
+            if results:
+                combined = "。".join(results)
+                return True, combined
+            else:
+                # 降级：查询今天
+                res = await execute_tool("get_weather", {"city": region, "date": "today"})
+                return True, res
+        else:
+            # 单日期
+            date_type = "today"
+            for kw in date_map:
+                if kw in user_msg:
+                    date_type = date_map[kw]
+                    break
+            result = await execute_tool("get_weather", {"city": region, "date": date_type})
+            if "未找到城市" in result and region != "南京":
+                result = await execute_tool("get_weather", {"city": "南京", "date": date_type})
+            return True, result
 
     # 2. 搜索
     search_match = re.search(r"搜索(.+)", user_msg)
@@ -466,7 +489,7 @@ async def lifespan(app: FastAPI):
     yield
     await database.disconnect()
 
-app = FastAPI(title="语音陪聊智能体", version="6.9", lifespan=lifespan)
+app = FastAPI(title="语音陪聊智能体", version="6.10", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
 
