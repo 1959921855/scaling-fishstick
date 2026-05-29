@@ -14,6 +14,7 @@ import json
 import re
 import requests
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo  # 新增：用于中国时区
 
 from app.audio_handler import AudioHandler
 from app.database import (
@@ -123,9 +124,7 @@ async def execute_tool(tool_name: str, arguments: dict) -> str:
             if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
                 return f"未找到城市“{city}”，请尝试输入完整城市名（如“南京市”）。"
             
-            # 过滤行政区划：优先选择中国大陆的区/县级，排除台湾地区（除非明确输入“新北市”）
             geocodes = geo_data["geocodes"]
-            # 如果用户输入包含“区”字，优先匹配级别为“区”的结果
             selected = None
             if "区" in city:
                 for g in geocodes:
@@ -133,7 +132,6 @@ async def execute_tool(tool_name: str, arguments: dict) -> str:
                         selected = g
                         break
             if not selected:
-                # 默认取第一个结果，但排除台湾地区的“新北市”等
                 for g in geocodes:
                     if "台湾" in g.get("province", "") and "新北" not in city:
                         continue
@@ -197,9 +195,9 @@ async def execute_tool(tool_name: str, arguments: dict) -> str:
 
     return f"未知工具: {tool_name}"
 
-# ========== 时间辅助函数 ==========
+# ========== 时间辅助函数（使用中国时区 Asia/Shanghai） ==========
 def get_current_time() -> str:
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     weekday_str = weekdays[now.weekday()]
     hour = now.hour
@@ -214,7 +212,8 @@ def get_current_time() -> str:
     return f"现在是{now.year}年{now.month}月{now.day}日 {am_pm}{hour_12}点{minute}分，{weekday_str}"
 
 def get_relative_date(offset_days: int) -> str:
-    target = datetime.now() + timedelta(days=offset_days)
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    target = now + timedelta(days=offset_days)
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     weekday_str = weekdays[target.weekday()]
     if offset_days == 1:
@@ -278,7 +277,6 @@ async def get_temperature_for_date(city: str, date_type: str, temp_type: str) ->
     if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
         return f"未找到城市“{city}”"
     
-    # 同样进行过滤
     geocodes = geo_data["geocodes"]
     selected = None
     if "区" in city:
@@ -319,9 +317,9 @@ async def get_temperature_for_date(city: str, date_type: str, temp_type: str) ->
         temp = fc.get('nighttemp', '?')
         return f"{formatted_address}{day_label}的最低温度是 {temp}℃。"
 
-# ========== 核心隐式调用（年份、日期、天气） ==========
+# ========== 核心隐式调用（年份、日期、天气，时区已修正） ==========
 async def implicit_tool_call(user_msg: str) -> tuple[bool, str | None]:
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     
     # 年份查询（支持明年、后年、前年）
@@ -452,7 +450,7 @@ async def lifespan(app: FastAPI):
     yield
     await database.disconnect()
 
-app = FastAPI(title="语音陪聊智能体", version="6.6", lifespan=lifespan)
+app = FastAPI(title="语音陪聊智能体", version="6.7", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
 
@@ -598,4 +596,5 @@ async def web_chat(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, reload=False)
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
