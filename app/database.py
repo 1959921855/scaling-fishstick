@@ -4,7 +4,6 @@ from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, F
 from sqlalchemy.ext.declarative import declarative_base
 from databases import Database
 
-# 从环境变量读取数据库连接 URL（Railway 会自动注入 DATABASE_URL）
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./conversations.db")
 print(f"[database] 连接数据库: {DATABASE_URL}")
 
@@ -32,9 +31,10 @@ engine = create_engine(DATABASE_URL)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
-    # 如果使用的是 SQLite（本地测试），启用 WAL 模式提高并发；PostgreSQL 不需要
     if "sqlite" in DATABASE_URL:
         with engine.connect() as conn:
+            # 启用外键约束（SQLite 默认关闭）
+            conn.execute(text("PRAGMA foreign_keys=ON"))
             conn.execute(text("PRAGMA journal_mode=WAL"))
             conn.execute(text("PRAGMA synchronous=NORMAL"))
             conn.commit()
@@ -95,6 +95,12 @@ async def save_message(user_id: str, session_id: int, role: str, content: str):
     )
 
 async def delete_session(session_id: int, user_id: str) -> bool:
+    # 先删除该会话下的所有消息（确保级联删除）
+    await database.execute(
+        "DELETE FROM conversations WHERE session_id = :session_id",
+        values={"session_id": session_id}
+    )
+    # 再删除会话记录
     result = await database.execute(
         "DELETE FROM sessions WHERE id = :session_id AND user_id = :user_id",
         values={"session_id": session_id, "user_id": user_id}
