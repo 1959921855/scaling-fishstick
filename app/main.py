@@ -33,7 +33,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 全局 HTTP 客户端（连接池复用）
+# 全局 HTTP 客户端
 http_client: Optional[httpx.AsyncClient] = None
 
 search_cache = {}
@@ -56,12 +56,15 @@ class NewSessionRequest(BaseModel):
     user_id: str = "default_user"
     title: Optional[str] = "新对话"
 
-# ==================== 模型服务（DeepSeek 重试+超时） ====================
+# ==================== 模型服务（带重试和详细日志） ====================
 class ModelService:
     def __init__(self):
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
         if not self.api_key:
+            logger.error("❌ DEEPSEEK_API_KEY 环境变量未设置！")
             raise ValueError("DEEPSEEK_API_KEY not found")
+        # 脱敏显示前几位，确认 Key 已被读取
+        logger.info(f"✅ DeepSeek API Key 已加载: {self.api_key[:8]}****")
         self.client = OpenAI(
             api_key=self.api_key,
             base_url="https://api.deepseek.com/v1",
@@ -70,8 +73,9 @@ class ModelService:
 
     def chat(self, messages, tools=None, tool_choice="auto"):
         last_exception = None
-        for attempt in range(2):  # 重试一次
+        for attempt in range(2):
             try:
+                logger.info(f"🔵 DeepSeek 调用尝试 {attempt+1}，消息数: {len(messages)}，工具数: {len(tools) if tools else 0}")
                 response = self.client.chat.completions.create(
                     model="deepseek-chat",
                     messages=messages,
@@ -80,14 +84,15 @@ class ModelService:
                     tools=tools,
                     tool_choice=tool_choice
                 )
+                logger.info("✅ DeepSeek 调用成功")
                 return response.choices[0].message
             except Exception as e:
                 last_exception = e
-                logger.warning(f"DeepSeek 调用失败 (第{attempt+1}次): {e}")
+                logger.error(f"❌ DeepSeek 调用失败 (尝试 {attempt+1}): 类型={type(e).__name__}, 详情={str(e)}")
                 if attempt == 0:
                     import time
-                    time.sleep(1)  # 短暂等待后重试
-        logger.error(f"DeepSeek 重试后仍失败: {last_exception}")
+                    time.sleep(1)
+        logger.error(f"🚨 DeepSeek 全部重试失败，返回默认错误回复。最后异常: {last_exception}")
         class Dummy:
             content = "抱歉，我现在遇到网络问题，无法回答。"
             tool_calls = None
@@ -165,10 +170,11 @@ TOOLS = [
     }
 ]
 
-# ==================== 搜索（Tavily，已带重试） ====================
+# ==================== 搜索（Tavily，带重试和日志） ====================
 async def web_search(query: str, max_results: int = 5) -> List[tuple]:
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
+        logger.error("❌ TAVILY_API_KEY 未设置")
         return [("搜索服务未配置", "请联系管理员设置 Tavily API Key", "")]
 
     url = "https://api.tavily.com/search"
@@ -183,6 +189,7 @@ async def web_search(query: str, max_results: int = 5) -> List[tuple]:
 
     for attempt in range(2):
         try:
+            logger.info(f"🔍 Tavily 搜索请求: {query[:30]}...")
             response = await http_client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
@@ -193,25 +200,24 @@ async def web_search(query: str, max_results: int = 5) -> List[tuple]:
                 url_link = item.get("url", "")
                 if content:
                     results.append((title, content, url_link))
-            if results:
-                return results
-            else:
-                return [("未找到相关信息", "请换个关键词试试", "")]
-        except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
-            logger.warning(f"Tavily 第 {attempt+1} 次尝试失败: {e}")
+            logger.info(f"✅ Tavily 返回 {len(results)} 条结果")
+            return results if results else [("未找到相关信息", "请换个关键词试试", "")]
+        except Exception as e:
+            logger.error(f"❌ Tavily 失败 (尝试 {attempt+1}): {e}")
             if attempt == 0:
                 await asyncio.sleep(1)
-
+    logger.error("🚨 Tavily 搜索全部失败")
     return [("搜索失败", "暂时无法完成搜索，请稍后再试", "")]
 
-# ==================== 天气（高德，带重试） ====================
+# ==================== 天气（高德，带重试和日志） ====================
 async def get_weather_tool(city: str, date_type: str = "today") -> str:
     if not city or not city.strip():
         city = "南京"
-    logger.info(f"天气查询城市: {city}")
+    logger.info(f"🌤️ 天气查询城市: {city}")
     GAODE_API_KEY = os.getenv("GAODE_API_KEY")
     if not GAODE_API_KEY:
-        return "天气服务配置错误，请联系管理员。"
+        logger.error("❌ GAODE_API_KEY 未设置")
+        return "天气服务配置错误。"
 
     async def request_geo():
         url = "https://restapi.amap.com/v3/geocode/geo"
@@ -227,10 +233,11 @@ async def get_weather_tool(city: str, date_type: str = "today") -> str:
         geo_resp = None
         for attempt in range(2):
             try:
+                logger.info(f"📍 地理编码尝试 {attempt+1}")
                 geo_resp = await request_geo()
                 break
             except Exception as e:
-                logger.warning(f"地理编码失败 (第{attempt+1}次): {e}")
+                logger.error(f"❌ 地理编码失败 (尝试 {attempt+1}): {e}")
                 if attempt == 0:
                     await asyncio.sleep(0.5)
         if geo_resp is None:
@@ -248,10 +255,11 @@ async def get_weather_tool(city: str, date_type: str = "today") -> str:
         weather_resp = None
         for attempt in range(2):
             try:
+                logger.info(f"🌦️ 天气请求尝试 {attempt+1}")
                 weather_resp = await request_weather(adcode, ext)
                 break
             except Exception as e:
-                logger.warning(f"天气请求失败 (第{attempt+1}次): {e}")
+                logger.error(f"❌ 天气请求失败 (尝试 {attempt+1}): {e}")
                 if attempt == 0:
                     await asyncio.sleep(0.5)
         if weather_resp is None:
@@ -274,7 +282,7 @@ async def get_weather_tool(city: str, date_type: str = "today") -> str:
             fc = forecasts[idx]
             return f"{location_name}{day_label}天气：{fc['dayweather']}，白天{fc['daytemp']}℃，夜间{fc['nighttemp']}℃，{fc['daywind']}风{fc['daypower']}级。"
     except Exception as e:
-        logger.error(f"天气异常: {e}")
+        logger.error(f"❌ 天气异常: {e}")
         return "天气服务暂时不可用。"
 
 # ==================== 股票（已有重试，保留） ====================
@@ -314,6 +322,7 @@ def clean_stock_symbol(raw: str) -> str:
 
 async def get_stock_quote(symbol: str, date: Optional[str] = None) -> str:
     if not symbol: return "请提供股票代码或名称"
+    logger.info(f"📈 股票查询: {symbol}")
     original_symbol = symbol
     symbol = clean_stock_symbol(symbol)
     if symbol in NAME_TO_CODE: code = NAME_TO_CODE[symbol]
@@ -414,8 +423,9 @@ def get_current_time() -> str:
     if h12==0: h12=12
     return f"现在是{now.year}年{now.month}月{now.day}日 {ap}{h12}点{now.minute:02d}分，{weekdays[now.weekday()]}"
 
-# ==================== 工具分发（带超时） ====================
+# ==================== 工具分发（带日志） ====================
 async def execute_tool(tool_name: str, arguments: dict) -> str:
+    logger.info(f"🛠️ 执行工具: {tool_name}, 参数: {arguments}")
     try:
         if tool_name == "get_weather":
             city = arguments.get("city", "")
@@ -448,7 +458,7 @@ async def execute_tool(tool_name: str, arguments: dict) -> str:
             return get_current_time()
         return "未知工具"
     except Exception as e:
-        logger.error(f"工具执行异常: {e}")
+        logger.error(f"❌ 工具执行异常: {e}")
         return "服务暂时不可用，请稍后重试"
 
 # ==================== 系统提示词 ====================
@@ -464,15 +474,18 @@ SYSTEM_PROMPT = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client, audio_handler
+    logger.info("🚀 正在启动服务...")
     init_db()
     await database.connect()
     audio_handler = AudioHandler()
     http_client = httpx.AsyncClient(timeout=15.0)
+    logger.info("✅ 全局 httpx 连接池已创建，服务已启动")
     yield
     await http_client.aclose()
     await database.disconnect()
+    logger.info("🛑 服务关闭")
 
-app = FastAPI(title="小暖智能体", version="22.0", lifespan=lifespan)
+app = FastAPI(title="小暖智能体", version="23.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
 
@@ -516,7 +529,9 @@ async def text_chat(request: ChatRequest):
     user_id = request.user_id
     user_msg = request.message
     session_id = request.session_id
+    logger.info(f"📩 收到消息: {user_msg[:60]}...")
 
+    # 分页缓存处理（省略，不变）
     if user_msg.strip() in ["继续","下一条","更多","next"] and session_id and session_id in search_cache:
         cache = search_cache[session_id]
         if cache["current_index"] < len(cache["chunks"]):
@@ -545,6 +560,7 @@ async def text_chat(request: ChatRequest):
     try:
         assistant_message = model_service.chat(messages, tools=TOOLS, tool_choice="auto")
         if hasattr(assistant_message, 'tool_calls') and assistant_message.tool_calls:
+            logger.info(f"🔧 模型要求调用工具: {[tc.function.name for tc in assistant_message.tool_calls]}")
             messages.append(assistant_message)
             for tool_call in assistant_message.tool_calls:
                 tool_name = tool_call.function.name
@@ -556,6 +572,7 @@ async def text_chat(request: ChatRequest):
                     )
                 except asyncio.TimeoutError:
                     tool_result = "服务超时，请稍后再试。"
+                    logger.error(f"⏱️ 工具 {tool_name} 超时")
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -566,7 +583,7 @@ async def text_chat(request: ChatRequest):
         else:
             final_reply = assistant_message.content if assistant_message else "抱歉，我无法处理。"
     except Exception as e:
-        logger.error(f"对话异常: {e}")
+        logger.error(f"❌ 对话异常: {e}", exc_info=True)
         final_reply = "抱歉，我现在遇到一点问题，请稍后再试。"
 
     await save_message(user_id, session_id, "user", user_msg)
@@ -579,6 +596,7 @@ async def text_chat(request: ChatRequest):
 
     return ChatResponse(response=final_reply, session_id=session_id)
 
+# ==================== TTS 和语音 ====================
 @app.post("/chat/text-to-speech")
 async def text_to_speech_only(req: TextToSpeechRequest):
     audio_bytes = await audio_handler.text_to_speech(req.text, req.voice)
