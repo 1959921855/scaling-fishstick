@@ -56,14 +56,13 @@ class NewSessionRequest(BaseModel):
     user_id: str = "default_user"
     title: Optional[str] = "新对话"
 
-# ==================== 模型服务（带重试和详细日志） ====================
+# ==================== 模型服务（带重试，错误返回前端） ====================
 class ModelService:
     def __init__(self):
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
         if not self.api_key:
             logger.error("❌ DEEPSEEK_API_KEY 环境变量未设置！")
             raise ValueError("DEEPSEEK_API_KEY not found")
-        # 脱敏显示前几位，确认 Key 已被读取
         logger.info(f"✅ DeepSeek API Key 已加载: {self.api_key[:8]}****")
         self.client = OpenAI(
             api_key=self.api_key,
@@ -92,11 +91,14 @@ class ModelService:
                 if attempt == 0:
                     import time
                     time.sleep(1)
-        logger.error(f"🚨 DeepSeek 全部重试失败，返回默认错误回复。最后异常: {last_exception}")
+        # 将错误详情返回给前端
+        error_detail = f"{type(last_exception).__name__}: {str(last_exception)}" if last_exception else "未知错误"
+        logger.error(f"🚨 DeepSeek 全部重试失败: {error_detail}")
         class Dummy:
-            content = "抱歉，我现在遇到网络问题，无法回答。"
-            tool_calls = None
-        return Dummy()
+            def __init__(self, msg):
+                self.content = f"抱歉，我现在遇到网络问题，无法回答。\n\n【调试信息】\n{msg}"
+                self.tool_calls = None
+        return Dummy(error_detail)
 
 model_service = ModelService()
 
@@ -170,7 +172,7 @@ TOOLS = [
     }
 ]
 
-# ==================== 搜索（Tavily，带重试和日志） ====================
+# ==================== 搜索（Tavily，带重试） ====================
 async def web_search(query: str, max_results: int = 5) -> List[tuple]:
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
@@ -209,7 +211,7 @@ async def web_search(query: str, max_results: int = 5) -> List[tuple]:
     logger.error("🚨 Tavily 搜索全部失败")
     return [("搜索失败", "暂时无法完成搜索，请稍后再试", "")]
 
-# ==================== 天气（高德，带重试和日志） ====================
+# ==================== 天气（高德，带重试） ====================
 async def get_weather_tool(city: str, date_type: str = "today") -> str:
     if not city or not city.strip():
         city = "南京"
@@ -285,7 +287,7 @@ async def get_weather_tool(city: str, date_type: str = "today") -> str:
         logger.error(f"❌ 天气异常: {e}")
         return "天气服务暂时不可用。"
 
-# ==================== 股票（已有重试，保留） ====================
+# ==================== 股票（已有重试） ====================
 NAME_TO_CODE = {
     "工商银行": "sh601398", "建设银行": "sh601939", "农业银行": "sh601288",
     "中国银行": "sh601988", "招商银行": "sh600036", "交通银行": "sh601328",
@@ -485,7 +487,7 @@ async def lifespan(app: FastAPI):
     await database.disconnect()
     logger.info("🛑 服务关闭")
 
-app = FastAPI(title="小暖智能体", version="23.0", lifespan=lifespan)
+app = FastAPI(title="小暖智能体", version="24.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
 
@@ -523,7 +525,7 @@ async def delete_message_api(message_id: int, user_id: str = "default_user"):
 async def get_voices():
     return {"voices": await audio_handler.get_voices()}
 
-# ==================== 核心对话 ====================
+# ==================== 核心对话（错误详情返回前端） ====================
 @app.post("/chat/text", response_model=ChatResponse)
 async def text_chat(request: ChatRequest):
     user_id = request.user_id
@@ -531,7 +533,6 @@ async def text_chat(request: ChatRequest):
     session_id = request.session_id
     logger.info(f"📩 收到消息: {user_msg[:60]}...")
 
-    # 分页缓存处理（省略，不变）
     if user_msg.strip() in ["继续","下一条","更多","next"] and session_id and session_id in search_cache:
         cache = search_cache[session_id]
         if cache["current_index"] < len(cache["chunks"]):
@@ -584,7 +585,7 @@ async def text_chat(request: ChatRequest):
             final_reply = assistant_message.content if assistant_message else "抱歉，我无法处理。"
     except Exception as e:
         logger.error(f"❌ 对话异常: {e}", exc_info=True)
-        final_reply = "抱歉，我现在遇到一点问题，请稍后再试。"
+        final_reply = f"系统异常：{str(e)}"
 
     await save_message(user_id, session_id, "user", user_msg)
     await save_message(user_id, session_id, "assistant", final_reply)
