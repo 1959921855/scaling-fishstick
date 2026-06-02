@@ -12,7 +12,8 @@ import os
 import logging
 import json
 import re
-import requests
+import asyncio
+import httpx
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -31,6 +32,9 @@ from app.database import (
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# 全局 HTTP 客户端（连接池复用）
+http_client: Optional[httpx.AsyncClient] = None
 
 search_cache = {}
 
@@ -52,28 +56,23 @@ class NewSessionRequest(BaseModel):
     user_id: str = "default_user"
     title: Optional[str] = "新对话"
 
-# ========== 模型服务 ==========
+# ==================== 模型服务（DeepSeek 重试+超时） ====================
 class ModelService:
     def __init__(self):
-        self.cloud_api_key = os.getenv("DEEPSEEK_API_KEY")
-        self.use_cloud = self.cloud_api_key is not None
-        if self.use_cloud:
-            self.cloud_client = OpenAI(
-                api_key=self.cloud_api_key,
-                base_url="https://api.deepseek.com/v1"
-            )
-            logger.info("✅ 云端 DeepSeek 已启用")
-        else:
-            logger.warning("⚠️ 未设置 DEEPSEEK_API_KEY")
-        self.local_client = OpenAI(
-            api_key="ollama",
-            base_url="http://localhost:11434/v1"
+        self.api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not self.api_key:
+            raise ValueError("DEEPSEEK_API_KEY not found")
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url="https://api.deepseek.com/v1",
+            timeout=20.0
         )
 
     def chat(self, messages, tools=None, tool_choice="auto"):
-        if tools and self.use_cloud:
+        last_exception = None
+        for attempt in range(2):  # 重试一次
             try:
-                response = self.cloud_client.chat.completions.create(
+                response = self.client.chat.completions.create(
                     model="deepseek-chat",
                     messages=messages,
                     temperature=0.7,
@@ -83,28 +82,20 @@ class ModelService:
                 )
                 return response.choices[0].message
             except Exception as e:
-                logger.error(f"云端调用失败: {e}")
-        return self._local_chat(messages)
-
-    def _local_chat(self, messages):
-        try:
-            response = self.local_client.chat.completions.create(
-                model="deepseek-r1:1.5b",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=500,
-            )
-            return response.choices[0].message
-        except Exception as e:
-            logger.error(f"本地模型错误: {e}")
-            class Dummy:
-                content = "抱歉，我现在遇到了一点问题。"
-                tool_calls = None
-            return Dummy()
+                last_exception = e
+                logger.warning(f"DeepSeek 调用失败 (第{attempt+1}次): {e}")
+                if attempt == 0:
+                    import time
+                    time.sleep(1)  # 短暂等待后重试
+        logger.error(f"DeepSeek 重试后仍失败: {last_exception}")
+        class Dummy:
+            content = "抱歉，我现在遇到网络问题，无法回答。"
+            tool_calls = None
+        return Dummy()
 
 model_service = ModelService()
 
-# ========== 工具定义 ==========
+# ==================== 工具定义 ====================
 TOOLS = [
     {
         "type": "function",
@@ -174,115 +165,119 @@ TOOLS = [
     }
 ]
 
-# ========== 搜索实现 ==========
-async def ddgs_search(query: str, max_results: int = 5) -> List[tuple]:
-    from ddgs import DDGS
-    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
-    proxies = {"http://": proxy, "https://": proxy} if proxy else None
-    try:
-        with DDGS(timeout=8, proxies=proxies) as ddgs:
-            raw = list(ddgs.text(query, max_results=max_results))
-    except TypeError:
-        logger.warning("DDGS 不支持 proxies，尝试无代理")
-        try:
-            with DDGS(timeout=8) as ddgs:
-                raw = list(ddgs.text(query, max_results=max_results))
-        except Exception as e:
-            logger.error(f"DDGS 搜索失败: {e}")
-            return []
-    except Exception as e:
-        logger.error(f"DDGS 搜索失败: {e}")
-        return []
-
-    clean = []
-    for r in raw:
-        href = r.get('href', '')
-        title = r.get('title', '')
-        body = r.get('body', '')
-        if len(body) < 20:
-            continue
-        clean.append((title, body, href))
-    return clean
-
-async def tavily_search(query: str, max_results: int = 5) -> List[tuple]:
+# ==================== 搜索（Tavily，已带重试） ====================
+async def web_search(query: str, max_results: int = 5) -> List[tuple]:
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
-        return []
+        return [("搜索服务未配置", "请联系管理员设置 Tavily API Key", "")]
+
     url = "https://api.tavily.com/search"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "max_results": max_results,
+        "search_depth": "basic",
+        "include_answer": False
     }
-    payload = {"query": query, "max_results": max_results, "search_depth": "basic"}
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        results = []
-        for item in data.get("results", []):
-            title = item.get("title", "")
-            content = item.get("content", "")
-            url_link = item.get("url", "")
-            if content:
-                results.append((title, content, url_link))
-        return results
-    except Exception as e:
-        logger.error(f"Tavily 搜索失败: {e}")
-        return []
+    headers = {"Content-Type": "application/json"}
 
-async def web_search(query: str, max_results: int = 5) -> List[tuple]:
-    # 先尝试 DDGS（你已有代理）
-    results = await ddgs_search(query, max_results)
-    if results:
-        return results
-    # 再尝试 Tavily
-    return await tavily_search(query, max_results)
+    for attempt in range(2):
+        try:
+            response = await http_client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            results = []
+            for item in data.get("results", []):
+                title = item.get("title", "")
+                content = item.get("content", "")
+                url_link = item.get("url", "")
+                if content:
+                    results.append((title, content, url_link))
+            if results:
+                return results
+            else:
+                return [("未找到相关信息", "请换个关键词试试", "")]
+        except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
+            logger.warning(f"Tavily 第 {attempt+1} 次尝试失败: {e}")
+            if attempt == 0:
+                await asyncio.sleep(1)
 
-# ========== 天气、股票、时间函数（保持不变） ==========
+    return [("搜索失败", "暂时无法完成搜索，请稍后再试", "")]
+
+# ==================== 天气（高德，带重试） ====================
 async def get_weather_tool(city: str, date_type: str = "today") -> str:
     if not city or not city.strip():
         city = "南京"
     logger.info(f"天气查询城市: {city}")
+    GAODE_API_KEY = os.getenv("GAODE_API_KEY")
+    if not GAODE_API_KEY:
+        return "天气服务配置错误，请联系管理员。"
+
+    async def request_geo():
+        url = "https://restapi.amap.com/v3/geocode/geo"
+        return await http_client.get(url, params={"address": city, "key": GAODE_API_KEY})
+
+    async def request_weather(adcode, ext):
+        url = "https://restapi.amap.com/v3/weather/weatherInfo"
+        params = {"city": adcode, "key": GAODE_API_KEY, "extensions": ext}
+        return await http_client.get(url, params=params)
+
     try:
-        GAODE_API_KEY = os.getenv("GAODE_API_KEY")
-        if not GAODE_API_KEY:
-            return "天气服务配置错误"
-        geo_url = "https://restapi.amap.com/v3/geocode/geo"
-        geo_resp = requests.get(geo_url, params={"address": city, "key": GAODE_API_KEY}, timeout=10)
+        # 地理编码（重试）
+        geo_resp = None
+        for attempt in range(2):
+            try:
+                geo_resp = await request_geo()
+                break
+            except Exception as e:
+                logger.warning(f"地理编码失败 (第{attempt+1}次): {e}")
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+        if geo_resp is None:
+            return "天气查询超时，请稍后再试。"
+
         geo_data = geo_resp.json()
         if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
-            return f"未找到城市 {city}"
+            return f"未找到城市“{city}”，请尝试输入完整城市名。"
         geocode = geo_data["geocodes"][0]
         adcode = geocode["adcode"]
         location_name = geocode.get("formatted_address", city)
+
+        # 天气查询（重试）
+        ext = "base" if date_type == "today" else "all"
+        weather_resp = None
+        for attempt in range(2):
+            try:
+                weather_resp = await request_weather(adcode, ext)
+                break
+            except Exception as e:
+                logger.warning(f"天气请求失败 (第{attempt+1}次): {e}")
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+        if weather_resp is None:
+            return "天气信息获取超时，请稍后再试。"
+
+        data = weather_resp.json()
+        if data.get("status") != "1":
+            return f"无法获取 {location_name} 天气。"
+        
         if date_type == "today":
-            weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
-            params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "base"}
-            resp = requests.get(weather_url, params=params, timeout=10)
-            data = resp.json()
-            if data.get("status") != "1":
-                return f"无法获取 {location_name} 天气"
             live = data["lives"][0]
             return f"{location_name} 当前天气：{live['weather']}，气温 {live['temperature']}℃，{live['winddirection']}风 {live['windpower']}级，湿度 {live['humidity']}%。"
         else:
-            weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
-            params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "all"}
-            resp = requests.get(weather_url, params=params, timeout=10)
-            data = resp.json()
-            if data.get("status") != "1":
-                return f"无法获取 {location_name} 预报"
             forecasts = data["forecasts"][0]["casts"]
             idx_map = {"tomorrow": 1, "dayafter": 2}
             idx = idx_map.get(date_type, 0)
             day_label = {"tomorrow": "明天", "dayafter": "后天"}.get(date_type, "今天")
             if idx >= len(forecasts):
-                return f"无法获取 {location_name} {day_label} 天气"
+                return f"无法获取 {location_name} {day_label} 天气。"
             fc = forecasts[idx]
             return f"{location_name}{day_label}天气：{fc['dayweather']}，白天{fc['daytemp']}℃，夜间{fc['nighttemp']}℃，{fc['daywind']}风{fc['daypower']}级。"
     except Exception as e:
         logger.error(f"天气异常: {e}")
-        return "天气服务暂时不可用"
+        return "天气服务暂时不可用。"
 
+# ==================== 股票（已有重试，保留） ====================
 NAME_TO_CODE = {
     "工商银行": "sh601398", "建设银行": "sh601939", "农业银行": "sh601288",
     "中国银行": "sh601988", "招商银行": "sh600036", "交通银行": "sh601328",
@@ -337,30 +332,81 @@ async def get_stock_quote(symbol: str, date: Optional[str] = None) -> str:
         else:
             try: target_date = datetime.strptime(date, "%Y-%m-%d").date()
             except: pass
-    if code in ['sh000001', 'sz399001', 'sz399006']:
-        if target_date: return f"📈 {original_symbol} 的历史数据暂不支持，以下为实时行情：\n"
-        url = f"https://hq.sinajs.cn/list={code}"
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"}
-        try:
-            resp = requests.get(url, headers=headers, timeout=5); resp.encoding = 'gbk'
-            data = resp.text.split('"')[1].split(",")
-            name, cur, yest = data[0], float(data[3]), float(data[2])
-            chg, chgp = cur - yest, (cur - yest)/yest*100 if yest else 0
-            return f"{name}\n最新 {cur:.2f} 点\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
-        except: return "指数查询失败"
-    url = f"https://hq.sinajs.cn/list={code}"
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=5); resp.encoding = 'gbk'
-        data = resp.text.split('"')[1].split(",")
-        name, cur, yest = data[0], float(data[3]), float(data[2])
-        chg, chgp = cur - yest, (cur - yest)/yest*100 if yest else 0
-        vol = int(float(data[8])) if len(data) > 8 else 0
-        if code.startswith(('sh','sz')): return f"{name}\n最新价 {cur:.2f} 元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)\n成交量 {vol} 手"
-        elif code.startswith('hk'): return f"{name}\n最新价 {cur:.2f} 港元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
-        else: return f"{name}\n最新价 {cur:.2f} 美元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
-    except: return "股票查询失败"
 
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"}
+
+    if code in ['sh000001', 'sz399001', 'sz399006']:
+        if target_date: return f"📈 {original_symbol} 历史数据暂不支持，以下为实时行情：\n"
+        url = f"https://hq.sinajs.cn/list={code}"
+        try:
+            resp = await http_client.get(url, headers=headers)
+            text = resp.text
+            if len(text) < 10: return f"未找到 {original_symbol} 的指数数据。"
+            parts = text.split('"')
+            if len(parts) < 2: return f"无法解析 {original_symbol} 数据。"
+            fields = parts[1].split(',')
+            if len(fields) < 10: return f"数据不完整，请稍后再试。"
+            name = fields[0]
+            cur = float(fields[3])
+            yest = float(fields[2])
+            chg = cur - yest
+            chgp = (chg / yest) * 100 if yest else 0
+            return f"{name}\n最新 {cur:.2f} 点\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
+        except Exception as e:
+            logger.error(f"指数查询异常: {e}")
+            return "指数查询失败。"
+
+    if target_date and YFINANCE_AVAILABLE:
+        try:
+            def query_history():
+                yf_code = code
+                if code.startswith('sh'): yf_code = code[2:] + ".SS"
+                elif code.startswith('sz'): yf_code = code[2:] + ".SZ"
+                elif code.startswith('hk'): yf_code = code[2:] + ".HK"
+                ticker = yf.Ticker(yf_code)
+                hist = ticker.history(start=target_date - timedelta(days=1), end=target_date + timedelta(days=1))
+                if not hist.empty:
+                    for idx, row in hist.iterrows():
+                        if idx.date() == target_date:
+                            return row['Close'], row['Open'], True
+                return None, None, False
+
+            close, open_price, ok = await asyncio.to_thread(query_history)
+            if ok:
+                change = close - open_price
+                change_percent = (change / open_price) * 100 if open_price else 0
+                return f"{symbol if symbol in NAME_TO_CODE else code} {target_date.strftime('%Y-%m-%d')}\n收盘价 {close:.2f} 元\n涨跌 {change:+.2f} ({change_percent:+.2f}%)"
+            else:
+                return f"未找到 {original_symbol} 在 {target_date.strftime('%Y-%m-%d')} 的交易数据（可能休市）。"
+        except Exception as e:
+            logger.error(f"历史股票查询异常: {e}")
+
+    url = f"https://hq.sinajs.cn/list={code}"
+    try:
+        resp = await http_client.get(url, headers=headers)
+        text = resp.text
+        if len(text) < 10: return f"未找到股票 '{original_symbol}'，请检查代码或名称。"
+        parts = text.split('"')
+        if len(parts) < 2: return f"无法解析股票 '{original_symbol}' 数据。"
+        fields = parts[1].split(',')
+        if len(fields) < 10: return f"数据不完整，请稍后再试。"
+        name = fields[0]
+        cur = float(fields[3])
+        yest = float(fields[2])
+        chg = cur - yest
+        chgp = (chg / yest) * 100 if yest else 0
+        volume = int(float(fields[8])) if len(fields) > 8 else 0
+        if code.startswith(('sh', 'sz')):
+            return f"{name}\n最新价 {cur:.2f} 元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)\n成交量 {volume} 手"
+        elif code.startswith('hk'):
+            return f"{name}\n最新价 {cur:.2f} 港元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
+        else:
+            return f"{name}\n最新价 {cur:.2f} 美元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
+    except Exception as e:
+        logger.error(f"股票查询异常: {e}")
+        return "股票查询失败，请稍后再试。"
+
+# ==================== 时间工具 ====================
 def get_current_time() -> str:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     weekdays = ["星期一","星期二","星期三","星期四","星期五","星期六","星期日"]
@@ -368,40 +414,44 @@ def get_current_time() -> str:
     if h12==0: h12=12
     return f"现在是{now.year}年{now.month}月{now.day}日 {ap}{h12}点{now.minute:02d}分，{weekdays[now.weekday()]}"
 
-# ========== 工具分发 ==========
+# ==================== 工具分发（带超时） ====================
 async def execute_tool(tool_name: str, arguments: dict) -> str:
-    if tool_name == "get_weather":
-        city = arguments.get("city", "")
-        if not city.strip(): city = "南京"
-        return await get_weather_tool(city, arguments.get("date", "today"))
-    elif tool_name == "web_search":
-        query = arguments.get("query", "")
-        if not query: return "请提供搜索词"
-        results = await web_search(query)
-        if not results: return f"未找到关于 '{query}' 的信息。"
-        lines = [f"🔍 搜索“{query}”结果："]
-        for i, (t, b, l) in enumerate(results[:5], 1):
-            lines.append(f"{i}. {t}")
-            lines.append(f"   {b[:120]}...")
-        return "\n".join(lines)
-    elif tool_name == "search_news":
-        query = arguments.get("query", "")
-        if not query: return "请提供新闻关键词"
-        results = await web_search(f"{query} 新闻", max_results=6)
-        if not results: return f"未找到关于 '{query}' 的新闻。"
-        lines = [f"📰 关于“{query}”的新闻："]
-        for i, (t, b, l) in enumerate(results[:6], 1):
-            lines.append(f"{i}. {t}")
-            cb = re.sub(r'[\\*]', '', b)[:120].strip()
-            if cb: lines.append(f"   {cb}")
-        return "\n".join(lines)
-    elif tool_name == "get_stock":
-        return await get_stock_quote(arguments.get("symbol"), arguments.get("date"))
-    elif tool_name == "get_current_time":
-        return get_current_time()
-    return "未知工具"
+    try:
+        if tool_name == "get_weather":
+            city = arguments.get("city", "")
+            if not city.strip(): city = "南京"
+            return await get_weather_tool(city, arguments.get("date", "today"))
+        elif tool_name == "web_search":
+            query = arguments.get("query", "")
+            if not query: return "请提供搜索词"
+            results = await web_search(query)
+            if not results: return "未找到相关信息。"
+            lines = [f"🔍 搜索“{query}”结果："]
+            for i, (t, b, l) in enumerate(results[:5], 1):
+                lines.append(f"{i}. {t}")
+                lines.append(f"   {b[:120]}...")
+            return "\n".join(lines)
+        elif tool_name == "search_news":
+            query = arguments.get("query", "")
+            if not query: return "请提供新闻关键词"
+            results = await web_search(f"{query} 新闻", max_results=6)
+            if not results: return "未找到相关新闻。"
+            lines = [f"📰 关于“{query}”的新闻："]
+            for i, (t, b, l) in enumerate(results[:6], 1):
+                lines.append(f"{i}. {t}")
+                cb = re.sub(r'[\\*]', '', b)[:120].strip()
+                if cb: lines.append(f"   {cb}")
+            return "\n".join(lines)
+        elif tool_name == "get_stock":
+            return await get_stock_quote(arguments.get("symbol"), arguments.get("date"))
+        elif tool_name == "get_current_time":
+            return get_current_time()
+        return "未知工具"
+    except Exception as e:
+        logger.error(f"工具执行异常: {e}")
+        return "服务暂时不可用，请稍后重试"
 
-# ========== 系统提示词 ==========
+# ==================== 系统提示词 ====================
 SYSTEM_PROMPT = (
     "你是小暖，一个亲切、耐心的老年人语音陪伴助手。"
     "请用简单易懂的口语和老人交流，使用“您”，回复尽量简短（2-3句话），方便语音播放。"
@@ -410,20 +460,23 @@ SYSTEM_PROMPT = (
     "不要使用任何 Markdown 符号。"
 )
 
-# ========== FastAPI 应用 ==========
+# ==================== 应用生命周期 ====================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global http_client, audio_handler
     init_db()
     await database.connect()
-    global audio_handler
     audio_handler = AudioHandler()
+    http_client = httpx.AsyncClient(timeout=15.0)
     yield
+    await http_client.aclose()
     await database.disconnect()
 
-app = FastAPI(title="小暖智能体", version="19.0", lifespan=lifespan)
+app = FastAPI(title="小暖智能体", version="22.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
 
+# ==================== 会话管理 ====================
 @app.post("/session/new")
 async def new_session(request: NewSessionRequest):
     sid = await create_session(request.user_id, request.title)
@@ -457,6 +510,7 @@ async def delete_message_api(message_id: int, user_id: str = "default_user"):
 async def get_voices():
     return {"voices": await audio_handler.get_voices()}
 
+# ==================== 核心对话 ====================
 @app.post("/chat/text", response_model=ChatResponse)
 async def text_chat(request: ChatRequest):
     user_id = request.user_id
@@ -495,7 +549,13 @@ async def text_chat(request: ChatRequest):
             for tool_call in assistant_message.tool_calls:
                 tool_name = tool_call.function.name
                 arguments = json.loads(tool_call.function.arguments)
-                tool_result = await execute_tool(tool_name, arguments)
+                try:
+                    tool_result = await asyncio.wait_for(
+                        execute_tool(tool_name, arguments),
+                        timeout=10.0
+                    )
+                except asyncio.TimeoutError:
+                    tool_result = "服务超时，请稍后再试。"
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -507,8 +567,7 @@ async def text_chat(request: ChatRequest):
             final_reply = assistant_message.content if assistant_message else "抱歉，我无法处理。"
     except Exception as e:
         logger.error(f"对话异常: {e}")
-        fallback = model_service._local_chat(messages)
-        final_reply = fallback.content if fallback else "抱歉，我现在遇到了一点问题。"
+        final_reply = "抱歉，我现在遇到一点问题，请稍后再试。"
 
     await save_message(user_id, session_id, "user", user_msg)
     await save_message(user_id, session_id, "assistant", final_reply)
