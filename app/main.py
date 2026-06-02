@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from openai import OpenAI
 from dotenv import load_dotenv
 import uvicorn
@@ -16,6 +16,12 @@ import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+
 from app.audio_handler import AudioHandler
 from app.database import (
     database, init_db, save_message, get_session_messages, get_user_sessions,
@@ -26,7 +32,8 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ========== 数据模型 ==========
+search_cache = {}
+
 class ChatRequest(BaseModel):
     message: str
     user_id: Optional[str] = "default_user"
@@ -45,32 +52,57 @@ class NewSessionRequest(BaseModel):
     user_id: str = "default_user"
     title: Optional[str] = "新对话"
 
-# ========== DeepSeek 服务 ==========
-class DeepSeekService:
+# ========== 模型服务 ==========
+class ModelService:
     def __init__(self):
-        self.api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not self.api_key:
-            raise ValueError("DEEPSEEK_API_KEY not found")
-        self.client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com/v1")
+        self.cloud_api_key = os.getenv("DEEPSEEK_API_KEY")
+        self.use_cloud = self.cloud_api_key is not None
+        if self.use_cloud:
+            self.cloud_client = OpenAI(
+                api_key=self.cloud_api_key,
+                base_url="https://api.deepseek.com/v1"
+            )
+            logger.info("✅ 云端 DeepSeek 已启用")
+        else:
+            logger.warning("⚠️ 未设置 DEEPSEEK_API_KEY")
+        self.local_client = OpenAI(
+            api_key="ollama",
+            base_url="http://localhost:11434/v1"
+        )
 
-    def chat(self, messages: List[Dict], tools: Optional[List[Dict]] = None, tool_choice: str = "auto") -> any:
+    def chat(self, messages, tools=None, tool_choice="auto"):
+        if tools and self.use_cloud:
+            try:
+                response = self.cloud_client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=500,
+                    tools=tools,
+                    tool_choice=tool_choice
+                )
+                return response.choices[0].message
+            except Exception as e:
+                logger.error(f"云端调用失败: {e}")
+        return self._local_chat(messages)
+
+    def _local_chat(self, messages):
         try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
+            response = self.local_client.chat.completions.create(
+                model="deepseek-r1:1.5b",
                 messages=messages,
-                temperature=0.8,
-                max_tokens=250,
-                tools=tools,
-                tool_choice=tool_choice
+                temperature=0.7,
+                max_tokens=500,
             )
             return response.choices[0].message
         except Exception as e:
-            logger.error(f"DeepSeek API错误: {e}")
-            class DummyMessage:
-                def __init__(self, content):
-                    self.content = content
-                    self.tool_calls = None
-            return DummyMessage("抱歉，我现在遇到了一点问题。")
+            logger.error(f"本地模型错误: {e}")
+            class Dummy:
+                content = "抱歉，我现在遇到了一点问题。"
+                tool_calls = None
+            return Dummy()
+
+model_service = ModelService()
 
 # ========== 工具定义 ==========
 TOOLS = [
@@ -78,433 +110,331 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "查询指定地点的天气信息，支持城市或区域名称，例如'南京'、'江宁'、'北京海淀'。可以指定日期：'今天'、'明天'、'后天'。",
+            "description": "查询指定地点的天气信息。未指定城市时默认查询南京。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "city": {"type": "string", "description": "城市或区域名称，例如：南京、江宁、北京海淀"},
-                    "date": {"type": "string", "description": "日期，可选值：'today', 'tomorrow', 'dayafter'，默认为'today'"}
+                    "city": {"type": "string", "description": "城市或区域名称"},
+                    "date": {"type": "string", "description": "日期：'today'、'tomorrow'、'dayafter'，默认'today'"}
                 },
-                "required": ["city"],
-            },
-        },
+                "required": ["city"]
+            }
+        }
     },
     {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "联网搜索实时信息",
+            "description": "联网搜索实时信息，获取最新资料",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "搜索关键词"}
                 },
-                "required": ["query"],
-            },
-        },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_news",
+            "description": "搜索最新新闻资讯",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "新闻关键词"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stock",
+            "description": "查询股票或大盘指数实时行情，支持A股、港股、美股",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "股票代码或名称"},
+                    "date": {"type": "string", "description": "历史日期，如'昨天'、'前天'"}
+                },
+                "required": ["symbol"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "获取当前时间、日期、星期几",
+            "parameters": {"type": "object", "properties": {}}
+        }
     }
 ]
 
-# ========== 高德天气执行函数（带行政区划过滤） ==========
-async def execute_tool(tool_name: str, arguments: dict) -> str:
-    logger.info(f"[TOOL_CALL] 工具名称: {tool_name}, 参数: {arguments}")
-    if tool_name == "get_weather":
-        city = arguments.get("city")
-        date_type = arguments.get("date", "today")
-        if not city:
-            return "请提供城市或区域名称"
+# ========== 搜索实现 ==========
+async def ddgs_search(query: str, max_results: int = 5) -> List[tuple]:
+    from ddgs import DDGS
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    proxies = {"http://": proxy, "https://": proxy} if proxy else None
+    try:
+        with DDGS(timeout=8, proxies=proxies) as ddgs:
+            raw = list(ddgs.text(query, max_results=max_results))
+    except TypeError:
+        logger.warning("DDGS 不支持 proxies，尝试无代理")
         try:
-            GAODE_API_KEY = os.getenv("GAODE_API_KEY")
-            if not GAODE_API_KEY:
-                return "天气服务配置错误，请联系管理员。"
-            geo_url = "https://restapi.amap.com/v3/geocode/geo"
-            geo_params = {"address": city, "key": GAODE_API_KEY}
-            geo_resp = requests.get(geo_url, params=geo_params, timeout=10)
-            geo_data = geo_resp.json()
-            if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
-                return f"未找到城市“{city}”，请尝试输入完整城市名（如“南京市”）。"
-            
-            geocodes = geo_data["geocodes"]
-            selected = None
-            if "区" in city:
-                for g in geocodes:
-                    if "区" in g.get("level", "") and "台湾" not in g.get("province", ""):
-                        selected = g
-                        break
-            if not selected:
-                for g in geocodes:
-                    if "台湾" in g.get("province", "") and "新北" not in city:
-                        continue
-                    selected = g
-                    break
-            if not selected:
-                selected = geocodes[0]
-            
-            adcode = selected["adcode"]
-            formatted_address = selected.get("formatted_address", city)
-            logger.info(f"[GEO] 用户输入: {city}, 匹配到: {formatted_address} (adcode: {adcode})")
-            
-            if date_type == "today":
-                weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
-                params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "base"}
-                resp = requests.get(weather_url, params=params, timeout=10)
-                data = resp.json()
-                if data.get("status") != "1":
-                    return f"无法获取 {formatted_address} 的实时天气信息。"
-                live = data["lives"][0]
-                result = f"{formatted_address} 当前天气：{live['weather']}，气温 {live['temperature']}℃，{live['winddirection']}风 {live['windpower']}级，湿度 {live['humidity']}%。"
-                return result
-            else:
-                weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
-                params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "all"}
-                resp = requests.get(weather_url, params=params, timeout=10)
-                data = resp.json()
-                if data.get("status") != "1":
-                    return f"无法获取 {formatted_address} 的天气预报信息。"
-                forecasts = data["forecasts"][0]["casts"]
-                idx_map = {"tomorrow": 1, "dayafter": 2}
-                idx = idx_map.get(date_type, 0)
-                day_label = {"tomorrow": "明天", "dayafter": "后天"}.get(date_type, "今天")
-                if idx >= len(forecasts):
-                    return f"无法获取 {formatted_address} {day_label} 的天气信息。"
-                fc = forecasts[idx]
-                result = f"{formatted_address}{day_label}天气：{fc['dayweather']}，白天温度 {fc['daytemp']}℃，夜间温度 {fc['nighttemp']}℃，{fc['daywind']}风 {fc['daypower']}级。"
-                return result
+            with DDGS(timeout=8) as ddgs:
+                raw = list(ddgs.text(query, max_results=max_results))
         except Exception as e:
-            logger.error(f"高德请求异常: {e}", exc_info=True)
-            return "天气服务暂时不可用，请稍后再试。"
+            logger.error(f"DDGS 搜索失败: {e}")
+            return []
+    except Exception as e:
+        logger.error(f"DDGS 搜索失败: {e}")
+        return []
 
-    elif tool_name == "web_search":
-        query = arguments.get("query")
-        if not query:
-            return "请提供搜索词"
-        try:
-            from ddgs import DDGS
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=2))
-            if results:
-                snippets = [r['body'][:80] for r in results]
-                return "搜索结果：\n" + "\n".join(snippets)
-            else:
-                return f"未找到关于 '{query}' 的信息"
-        except ImportError:
-            return "联网搜索需要安装 ddgs"
-        except Exception as e:
-            logger.error(f"搜索错误: {e}")
-            return "搜索服务暂时不可用"
+    clean = []
+    for r in raw:
+        href = r.get('href', '')
+        title = r.get('title', '')
+        body = r.get('body', '')
+        if len(body) < 20:
+            continue
+        clean.append((title, body, href))
+    return clean
 
-    return f"未知工具: {tool_name}"
+async def tavily_search(query: str, max_results: int = 5) -> List[tuple]:
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return []
+    url = "https://api.tavily.com/search"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    payload = {"query": query, "max_results": max_results, "search_depth": "basic"}
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        results = []
+        for item in data.get("results", []):
+            title = item.get("title", "")
+            content = item.get("content", "")
+            url_link = item.get("url", "")
+            if content:
+                results.append((title, content, url_link))
+        return results
+    except Exception as e:
+        logger.error(f"Tavily 搜索失败: {e}")
+        return []
 
-# ========== 时间辅助函数（中国时区） ==========
-def get_current_time() -> str:
-    now = datetime.now(ZoneInfo("Asia/Shanghai"))
-    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-    weekday_str = weekdays[now.weekday()]
-    hour = now.hour
-    am_pm = "上午" if hour < 12 else "下午"
-    if hour == 0:
-        hour_12 = 12
-    elif hour > 12:
-        hour_12 = hour - 12
-    else:
-        hour_12 = hour
-    minute = str(now.minute).zfill(2)
-    return f"现在是{now.year}年{now.month}月{now.day}日 {am_pm}{hour_12}点{minute}分，{weekday_str}"
+async def web_search(query: str, max_results: int = 5) -> List[tuple]:
+    # 先尝试 DDGS（你已有代理）
+    results = await ddgs_search(query, max_results)
+    if results:
+        return results
+    # 再尝试 Tavily
+    return await tavily_search(query, max_results)
 
-def get_relative_date(offset_days: int) -> str:
-    now = datetime.now(ZoneInfo("Asia/Shanghai"))
-    target = now + timedelta(days=offset_days)
-    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-    weekday_str = weekdays[target.weekday()]
-    if offset_days == 1:
-        label = "明天"
-    elif offset_days == 2:
-        label = "后天"
-    else:
-        label = f"{offset_days}天后"
-    return f"{label}是{target.month}月{target.day}日，{weekday_str}。"
+# ========== 天气、股票、时间函数（保持不变） ==========
+async def get_weather_tool(city: str, date_type: str = "today") -> str:
+    if not city or not city.strip():
+        city = "南京"
+    logger.info(f"天气查询城市: {city}")
+    try:
+        GAODE_API_KEY = os.getenv("GAODE_API_KEY")
+        if not GAODE_API_KEY:
+            return "天气服务配置错误"
+        geo_url = "https://restapi.amap.com/v3/geocode/geo"
+        geo_resp = requests.get(geo_url, params={"address": city, "key": GAODE_API_KEY}, timeout=10)
+        geo_data = geo_resp.json()
+        if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
+            return f"未找到城市 {city}"
+        geocode = geo_data["geocodes"][0]
+        adcode = geocode["adcode"]
+        location_name = geocode.get("formatted_address", city)
+        if date_type == "today":
+            weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
+            params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "base"}
+            resp = requests.get(weather_url, params=params, timeout=10)
+            data = resp.json()
+            if data.get("status") != "1":
+                return f"无法获取 {location_name} 天气"
+            live = data["lives"][0]
+            return f"{location_name} 当前天气：{live['weather']}，气温 {live['temperature']}℃，{live['winddirection']}风 {live['windpower']}级，湿度 {live['humidity']}%。"
+        else:
+            weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
+            params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "all"}
+            resp = requests.get(weather_url, params=params, timeout=10)
+            data = resp.json()
+            if data.get("status") != "1":
+                return f"无法获取 {location_name} 预报"
+            forecasts = data["forecasts"][0]["casts"]
+            idx_map = {"tomorrow": 1, "dayafter": 2}
+            idx = idx_map.get(date_type, 0)
+            day_label = {"tomorrow": "明天", "dayafter": "后天"}.get(date_type, "今天")
+            if idx >= len(forecasts):
+                return f"无法获取 {location_name} {day_label} 天气"
+            fc = forecasts[idx]
+            return f"{location_name}{day_label}天气：{fc['dayweather']}，白天{fc['daytemp']}℃，夜间{fc['nighttemp']}℃，{fc['daywind']}风{fc['daypower']}级。"
+    except Exception as e:
+        logger.error(f"天气异常: {e}")
+        return "天气服务暂时不可用"
 
-# ========== 地名提取（强化版，排除语气词） ==========
-WEATHER_KEYWORDS = {"天气", "温度", "气温"}
-
-EXCLUDE_WORDS = {
-    "现在", "请问", "知道", "那里", "这里", "什么", "今天", "明天", "后天", "昨日", "明日",
-    "查询", "预报", "风力", "湿度", "气象", "几点", "时间", "日期", "星期几", "几号",
-    "怎么", "怎样", "怎么样", "如何", "哪儿", "哪里", "哪", "什么样", "为何", "为什么",
-    "是", "的", "了", "吗", "呢", "吧", "啊", "呀", "嘛", "哦", "嗯", "么",
-    "一个", "一下", "一些", "这个", "那个", "哪个", "什么样", "如何", "多少",
-    "当前", "咋样", "到底", "啊啊", "哈哈", "嘿嘿", "哎", "唉", "哟", "噢", "唔",
-    "你好", "您好", "你们", "我们", "他们", "大家", "朋友", "帮忙", "请", "能", "可以",
-    "是否", "是不是", "为啥", "为何", "咋", "嘛", "咯"
+NAME_TO_CODE = {
+    "工商银行": "sh601398", "建设银行": "sh601939", "农业银行": "sh601288",
+    "中国银行": "sh601988", "招商银行": "sh600036", "交通银行": "sh601328",
+    "邮储银行": "sh601658", "兴业银行": "sh601166", "浦发银行": "sh600000",
+    "民生银行": "sh600016", "中信银行": "sh601998", "光大银行": "sh601818",
+    "平安银行": "sz000001", "宁波银行": "sz002142", "江苏银行": "sh600919",
+    "中国平安": "sh601318", "中国人寿": "sh601628", "中国太保": "sh601601",
+    "新华保险": "sh601336", "中信证券": "sh600030", "华泰证券": "sh601688",
+    "国泰君安": "sh601211", "海通证券": "sh600837", "贵州茅台": "sh600519",
+    "五粮液": "sz000858", "泸州老窖": "sz000568", "洋河股份": "sz002304",
+    "山西汾酒": "sh600809", "宁德时代": "sz300750", "比亚迪": "sz002594",
+    "美的集团": "sz000333", "格力电器": "sz000651", "海康威视": "sz002415",
+    "立讯精密": "sz002475", "京东方A": "sz000725", "中芯国际": "sh688981",
+    "腾讯": "hk00700", "阿里巴巴": "hk09988", "美团": "hk03690",
+    "中国石油": "sh601857", "中国石化": "sh600028", "中国神华": "sh601088",
+    "中国建筑": "sh601668", "万华化学": "sh600309", "伊利股份": "sh600887",
+    "海尔智家": "sh600690", "三一重工": "sh600031", "恒瑞医药": "sh600276",
+    "迈瑞医疗": "sz300760", "药明康德": "sh603259", "茅台": "sh600519",
+    "招商银": "sh600036", "工商银": "sh601398", "中国银": "sh601988",
+    "建设银": "sh601939", "农业银": "sh601288", "交通银": "sh601328",
+    "平安": "sz000001", "宁王": "sz300750", "迪王": "sz002594",
+    "上证指数": "sh000001", "深证成指": "sz399001", "创业板指": "sz399006",
+    "上证": "sh000001", "深证": "sz399001", "创业板": "sz399006",
 }
 
-def clean_region(raw: str) -> str:
-    if not raw:
-        return ""
-    for w in WEATHER_KEYWORDS:
-        raw = raw.replace(w, "")
-    sorted_exclude = sorted(EXCLUDE_WORDS, key=len, reverse=True)
-    changed = True
-    while changed:
-        changed = False
-        for word in sorted_exclude:
-            if word in raw:
-                raw = raw.replace(word, "")
-                changed = True
-    raw = re.sub(r'[^\u4e00-\u9fa5]', '', raw)
-    match = re.search(r"([\u4e00-\u9fa5]{2,})", raw)
-    return match.group(1) if match else ""
+def clean_stock_symbol(raw: str) -> str:
+    if not raw: return ""
+    cleaned = re.sub(r'昨天|前天|今日|明日|股票|股价|行情|查一下|的|了|吗|呢', '', raw).strip()
+    if not cleaned: return raw
+    if cleaned in NAME_TO_CODE: return cleaned
+    for full_name in NAME_TO_CODE.keys():
+        if full_name.startswith(cleaned): return full_name
+    return cleaned
 
-def extract_region_and_date(text: str) -> tuple[Optional[str], Optional[str]]:
-    date_map = {"今天": "today", "明天": "tomorrow", "后天": "dayafter", "明日": "tomorrow"}
-    date_type = None
-    for kw, dt in date_map.items():
-        if kw in text:
-            date_type = dt
-            break
-    clean_text = text
-    for kw in date_map.keys():
-        clean_text = clean_text.replace(kw, "")
-    match = re.search(r"([\u4e00-\u9fa5]{2,})", clean_text)
-    region = match.group(1) if match else None
-    if region and region in EXCLUDE_WORDS:
-        region = None
-    if region and len(region) < 2:
-        region = None
-    return region, date_type
-
-async def get_temperature_for_date(city: str, date_type: str, temp_type: str) -> str:
-    GAODE_API_KEY = os.getenv("GAODE_API_KEY")
-    if not GAODE_API_KEY:
-        return "天气服务配置错误"
-    geo_url = "https://restapi.amap.com/v3/geocode/geo"
-    geo_params = {"address": city, "key": GAODE_API_KEY}
-    geo_resp = requests.get(geo_url, params=geo_params, timeout=10)
-    geo_data = geo_resp.json()
-    if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
-        return f"未找到城市“{city}”"
-    
-    geocodes = geo_data["geocodes"]
-    selected = None
-    if "区" in city:
-        for g in geocodes:
-            if "区" in g.get("level", "") and "台湾" not in g.get("province", ""):
-                selected = g
-                break
-    if not selected:
-        for g in geocodes:
-            if "台湾" in g.get("province", "") and "新北" not in city:
-                continue
-            selected = g
-            break
-    if not selected:
-        selected = geocodes[0]
-    
-    adcode = selected["adcode"]
-    formatted_address = selected.get("formatted_address", city)
-    logger.info(f"[GEO_TEMP] 用户输入: {city}, 匹配到: {formatted_address}")
-    
-    weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
-    params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "all"}
-    resp = requests.get(weather_url, params=params, timeout=10)
-    data = resp.json()
-    if data.get("status") != "1":
-        return f"无法获取 {formatted_address} 的天气信息"
-    forecasts = data["forecasts"][0]["casts"]
-    idx_map = {"today": 0, "tomorrow": 1, "dayafter": 2}
-    idx = idx_map.get(date_type, 0)
-    if idx >= len(forecasts):
-        return f"无法获取 {formatted_address} 指定日期的天气"
-    fc = forecasts[idx]
-    day_label = {"today": "今天", "tomorrow": "明天", "dayafter": "后天"}.get(date_type, "今天")
-    if temp_type == "max":
-        temp = fc.get('daytemp', '?')
-        return f"{formatted_address}{day_label}的最高温度是 {temp}℃。"
+async def get_stock_quote(symbol: str, date: Optional[str] = None) -> str:
+    if not symbol: return "请提供股票代码或名称"
+    original_symbol = symbol
+    symbol = clean_stock_symbol(symbol)
+    if symbol in NAME_TO_CODE: code = NAME_TO_CODE[symbol]
     else:
-        temp = fc.get('nighttemp', '?')
-        return f"{formatted_address}{day_label}的最低温度是 {temp}℃。"
+        code = symbol
+        if symbol.isdigit() and len(symbol) == 6:
+            if symbol.startswith('6'): code = f"sh{symbol}"
+            else: code = f"sz{symbol}"
+        elif symbol.isdigit() and len(symbol) == 5: code = f"hk{symbol}"
+        else: code = symbol.upper()
+    target_date = None
+    if date:
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        if date == "昨天": target_date = today - timedelta(days=1)
+        elif date == "前天": target_date = today - timedelta(days=2)
+        else:
+            try: target_date = datetime.strptime(date, "%Y-%m-%d").date()
+            except: pass
+    if code in ['sh000001', 'sz399001', 'sz399006']:
+        if target_date: return f"📈 {original_symbol} 的历史数据暂不支持，以下为实时行情：\n"
+        url = f"https://hq.sinajs.cn/list={code}"
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"}
+        try:
+            resp = requests.get(url, headers=headers, timeout=5); resp.encoding = 'gbk'
+            data = resp.text.split('"')[1].split(",")
+            name, cur, yest = data[0], float(data[3]), float(data[2])
+            chg, chgp = cur - yest, (cur - yest)/yest*100 if yest else 0
+            return f"{name}\n最新 {cur:.2f} 点\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
+        except: return "指数查询失败"
+    url = f"https://hq.sinajs.cn/list={code}"
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=5); resp.encoding = 'gbk'
+        data = resp.text.split('"')[1].split(",")
+        name, cur, yest = data[0], float(data[3]), float(data[2])
+        chg, chgp = cur - yest, (cur - yest)/yest*100 if yest else 0
+        vol = int(float(data[8])) if len(data) > 8 else 0
+        if code.startswith(('sh','sz')): return f"{name}\n最新价 {cur:.2f} 元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)\n成交量 {vol} 手"
+        elif code.startswith('hk'): return f"{name}\n最新价 {cur:.2f} 港元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
+        else: return f"{name}\n最新价 {cur:.2f} 美元\n涨跌 {chg:+.2f} ({chgp:+.2f}%)"
+    except: return "股票查询失败"
 
-# ========== 核心隐式调用（支持多日期天气） ==========
-async def implicit_tool_call(user_msg: str) -> tuple[bool, str | None]:
+def get_current_time() -> str:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
-    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-    
-    # 年份查询
-    year_keywords = {
-        "今年": 0,
-        "明年": 1,
-        "后年": 2,
-        "前年": -1,
-        "大前年": -2
-    }
-    for kw, offset in year_keywords.items():
-        if kw in user_msg and any(q in user_msg for q in ["哪一年", "年份", "哪年"]):
-            target_year = now.year + offset
-            return True, f"{kw}是{target_year}年。"
-    if any(kw in user_msg for kw in ["哪一年", "今年哪一年", "年份"]):
-        return True, f"今年是{now.year}年。"
-    
-    # 月份查询
-    if any(kw in user_msg for kw in ["几月", "月份"]):
-        return True, f"现在是{now.month}月。"
-    
-    # 日期/星期/时间查询
-    time_keywords = ["几点", "时间", "日期", "星期几", "几号", "周几"]
-    if any(kw in user_msg for kw in time_keywords):
-        if "明天" in user_msg:
-            return True, get_relative_date(1)
-        elif "后天" in user_msg:
-            return True, get_relative_date(2)
-        else:
-            if any(kw in user_msg for kw in ["几点", "时间"]):
-                hour = now.hour
-                am_pm = "上午" if hour < 12 else "下午"
-                if hour == 0:
-                    hour_12 = 12
-                elif hour > 12:
-                    hour_12 = hour - 12
-                else:
-                    hour_12 = hour
-                minute = str(now.minute).zfill(2)
-                return True, f"现在是{now.year}年{now.month}月{now.day}日 {am_pm}{hour_12}点{minute}分，{weekdays[now.weekday()]}。"
-            else:
-                return True, f"今天是{now.year}年{now.month}月{now.day}日，{weekdays[now.weekday()]}。"
+    weekdays = ["星期一","星期二","星期三","星期四","星期五","星期六","星期日"]
+    h = now.hour; ap = "上午" if h<12 else "下午"; h12 = h if h<=12 else h-12
+    if h12==0: h12=12
+    return f"现在是{now.year}年{now.month}月{now.day}日 {ap}{h12}点{now.minute:02d}分，{weekdays[now.weekday()]}"
 
-    # 1. 天气
-    if any(kw in user_msg for kw in WEATHER_KEYWORDS):
-        temp_type = None
-        if "最低温度" in user_msg or "最低气温" in user_msg:
-            temp_type = "min"
-        elif "最高温度" in user_msg or "最高气温" in user_msg:
-            temp_type = "max"
-        
-        raw_region, _ = extract_region_and_date(user_msg)
-        region = clean_region(raw_region) if raw_region else None
-        if region and region in EXCLUDE_WORDS:
-            region = None
-        if not region:
-            region = "南京"
-        
-        # 检测多个日期
-        date_map = {"今天": "today", "明天": "tomorrow", "后天": "dayafter"}
-        found_dates = [kw for kw in date_map.keys() if kw in user_msg]
-        
-        # 如果是最高/最低温度，不支持多日期，只取第一个
-        if temp_type:
-            date_type = "today"
-            for kw in date_map:
-                if kw in user_msg:
-                    date_type = date_map[kw]
-                    break
-            result = await get_temperature_for_date(region, date_type, temp_type)
-            if "未找到城市" in result and region != "南京":
-                result = await get_temperature_for_date("南京", date_type, temp_type)
-            return True, result
-        
-        # 普通天气：支持多日期
-        if len(found_dates) > 1:
-            results = []
-            for d in found_dates:
-                dt = date_map[d]
-                res = await execute_tool("get_weather", {"city": region, "date": dt})
-                if "未找到" not in res and "错误" not in res and "不可用" not in res:
-                    results.append(res)
-            if results:
-                combined = "。".join(results)
-                return True, combined
-            else:
-                # 降级：查询今天
-                res = await execute_tool("get_weather", {"city": region, "date": "today"})
-                return True, res
-        else:
-            # 单日期
-            date_type = "today"
-            for kw in date_map:
-                if kw in user_msg:
-                    date_type = date_map[kw]
-                    break
-            result = await execute_tool("get_weather", {"city": region, "date": date_type})
-            if "未找到城市" in result and region != "南京":
-                result = await execute_tool("get_weather", {"city": "南京", "date": date_type})
-            return True, result
-
-    # 2. 搜索
-    search_match = re.search(r"搜索(.+)", user_msg)
-    if search_match:
-        query = search_match.group(1).strip()
-        if query:
-            result = await execute_tool("web_search", {"query": query})
-            return True, result
-
-    return False, None
+# ========== 工具分发 ==========
+async def execute_tool(tool_name: str, arguments: dict) -> str:
+    if tool_name == "get_weather":
+        city = arguments.get("city", "")
+        if not city.strip(): city = "南京"
+        return await get_weather_tool(city, arguments.get("date", "today"))
+    elif tool_name == "web_search":
+        query = arguments.get("query", "")
+        if not query: return "请提供搜索词"
+        results = await web_search(query)
+        if not results: return f"未找到关于 '{query}' 的信息。"
+        lines = [f"🔍 搜索“{query}”结果："]
+        for i, (t, b, l) in enumerate(results[:5], 1):
+            lines.append(f"{i}. {t}")
+            lines.append(f"   {b[:120]}...")
+        return "\n".join(lines)
+    elif tool_name == "search_news":
+        query = arguments.get("query", "")
+        if not query: return "请提供新闻关键词"
+        results = await web_search(f"{query} 新闻", max_results=6)
+        if not results: return f"未找到关于 '{query}' 的新闻。"
+        lines = [f"📰 关于“{query}”的新闻："]
+        for i, (t, b, l) in enumerate(results[:6], 1):
+            lines.append(f"{i}. {t}")
+            cb = re.sub(r'[\\*]', '', b)[:120].strip()
+            if cb: lines.append(f"   {cb}")
+        return "\n".join(lines)
+    elif tool_name == "get_stock":
+        return await get_stock_quote(arguments.get("symbol"), arguments.get("date"))
+    elif tool_name == "get_current_time":
+        return get_current_time()
+    return "未知工具"
 
 # ========== 系统提示词 ==========
 SYSTEM_PROMPT = (
-    "你是小暖，一个面向老年人的语音陪聊助手。"
-    "说话亲切、简短、易懂，使用“您”。"
-    "多关心老人身体和心情。"
-    "每次回复不超过2-3句话，方便语音播放。"
-    "涉及天气时，使用系统提供的实时数据，用口语转述。"
-    "回答天气问题时，请完整说出所有数据：天气状况、温度、湿度、风力等，不要遗漏。"
-    "如果系统提示默认查询南京，请按南京的数据回答。"
-    "不要使用括号描述动作或语气。"
+    "你是小暖，一个亲切、耐心的老年人语音陪伴助手。"
+    "请用简单易懂的口语和老人交流，使用“您”，回复尽量简短（2-3句话），方便语音播放。"
+    "当需要实时信息（天气、新闻、股价、时间等）时，请调用提供的工具函数，并根据返回结果生成自然回答。"
+    "如果用户没有指明城市，天气默认查询南京。"
+    "不要使用任何 Markdown 符号。"
 )
 
-def build_direct_reply(user_msg: str, tool_result: str) -> str:
-    time_indicators = ["几点", "时间", "日期", "星期几", "几号", "周几", "哪一年", "年份", "几月", "月份"]
-    if any(kw in user_msg for kw in time_indicators):
-        return tool_result
-    if any(kw in user_msg for kw in WEATHER_KEYWORDS):
-        if "最高温度" in tool_result or "最低温度" in tool_result:
-            return tool_result
-        return f"好的，{tool_result}。您要注意天气变化，保重身体哦。"
-    return tool_result
-
-def validate_and_fix_reply(user_msg: str, ai_reply: str, tool_result: str | None) -> str:
-    time_indicators = ["几点", "时间", "日期", "星期几", "几号", "周几", "哪一年", "年份", "几月", "月份"]
-    if any(kw in user_msg for kw in time_indicators):
-        return ai_reply
-    if any(kw in user_msg for kw in WEATHER_KEYWORDS) and tool_result:
-        if "错误" not in tool_result and "不可用" not in tool_result and "未找到" not in tool_result:
-            has_temp = bool(re.search(r'\d+\s*[℃度]', ai_reply))
-            has_humidity = "湿度" in ai_reply
-            has_wind = "风" in ai_reply
-            if not (has_temp and has_humidity and has_wind):
-                return f"好的，{tool_result}。您要注意天气变化，保重身体哦。"
-    return ai_reply
-
-# ========== 全局实例 ==========
-deepseek_service = None
-audio_handler = None
-
+# ========== FastAPI 应用 ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global deepseek_service, audio_handler
-    logger.info("初始化智能体...")
     init_db()
     await database.connect()
-    deepseek_service = DeepSeekService()
+    global audio_handler
     audio_handler = AudioHandler()
-    logger.info("所有服务初始化完成")
     yield
     await database.disconnect()
 
-app = FastAPI(title="语音陪聊智能体", version="6.10", lifespan=lifespan)
+app = FastAPI(title="小暖智能体", version="19.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 templates = Jinja2Templates(directory="templates")
 
-# ========== 会话管理 API ==========
 @app.post("/session/new")
 async def new_session(request: NewSessionRequest):
-    session_id = await create_session(request.user_id, request.title)
-    return {"session_id": session_id, "title": request.title}
+    sid = await create_session(request.user_id, request.title)
+    return {"session_id": sid, "title": request.title}
 
 @app.get("/sessions/{user_id}")
-async def list_sessions(user_id: str, limit: int = 50):
-    sessions = await get_user_sessions(user_id, limit)
+async def list_sessions(user_id: str):
+    sessions = await get_user_sessions(user_id)
     for s in sessions:
-        last_msg = await get_session_last_message(s["id"])
-        s["preview"] = (last_msg["content"][:50] + "...") if last_msg and len(last_msg["content"]) > 50 else (last_msg["content"] if last_msg else "暂无消息")
+        last = await get_session_last_message(s["id"])
+        s["preview"] = (last["content"][:50]+"...") if last and len(last["content"])>50 else (last["content"] if last else "暂无消息")
     return {"sessions": sessions}
 
 @app.get("/session/{session_id}/messages")
@@ -514,70 +444,54 @@ async def get_messages(session_id: int):
 @app.delete("/session/{session_id}")
 async def del_session(session_id: int, user_id: str = "default_user"):
     if not await delete_session(session_id, user_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(404, "Session not found")
     return {"status": "deleted"}
 
 @app.delete("/conversation/message/{message_id}")
 async def delete_message_api(message_id: int, user_id: str = "default_user"):
     if not await delete_message_by_id(message_id, user_id):
-        raise HTTPException(status_code=404, detail="Message not found")
+        raise HTTPException(404, "Message not found")
     return {"status": "deleted"}
 
 @app.get("/voices")
 async def get_voices():
     return {"voices": await audio_handler.get_voices()}
 
-# ========== 核心聊天接口 ==========
 @app.post("/chat/text", response_model=ChatResponse)
 async def text_chat(request: ChatRequest):
     user_id = request.user_id
     user_msg = request.message
+    session_id = request.session_id
 
-    logger.info(f"[REQUEST] user={user_id}, session={request.session_id}, msg={user_msg[:50]}")
+    if user_msg.strip() in ["继续","下一条","更多","next"] and session_id and session_id in search_cache:
+        cache = search_cache[session_id]
+        if cache["current_index"] < len(cache["chunks"]):
+            chunk = cache["chunks"][cache["current_index"]]
+            cache["current_index"] += 1
+            reply = chunk
+            if cache["current_index"] < len(cache["chunks"]):
+                reply += "\n\n（还有更多，回复“继续”查看下一段）"
+            else:
+                del search_cache[session_id]
+            return ChatResponse(response=reply, session_id=session_id)
+        else:
+            del search_cache[session_id]
+            return ChatResponse(response="没有更多内容了。", session_id=session_id)
 
-    implicit_triggered, tool_result = await implicit_tool_call(user_msg)
-
-    if request.session_id is None:
+    if session_id is None:
         session_id = await create_session(user_id, "新对话")
-        logger.info(f"[NEW_SESSION] 创建新会话 {session_id}")
-    else:
-        session_id = request.session_id
 
-    MAX_HISTORY = 10
-    history = await get_session_messages(session_id, limit=MAX_HISTORY)
-    if len(history) > MAX_HISTORY:
-        history = history[-MAX_HISTORY:]
-        logger.warning(f"[HISTORY] 会话 {session_id} 历史消息超过 {MAX_HISTORY} 条，已截断至最后 {MAX_HISTORY} 条")
-    logger.info(f"[HISTORY] 加载了 {len(history)} 条历史消息")
-
+    history = await get_session_messages(session_id, limit=6)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": user_msg})
 
-    estimated_tokens = sum(len(m.get("content", "")) for m in messages) // 2
-    if estimated_tokens > 10000:
-        logger.warning(f"[TOKEN_EST] 当前 messages 估算 token 数 {estimated_tokens}，可能超过限制！")
-
     final_reply = ""
-
-    if implicit_triggered:
-        if tool_result and "错误" not in tool_result and "不可用" not in tool_result and "未找到" not in tool_result:
-            final_reply = build_direct_reply(user_msg, tool_result)
-            logger.info(f"[IMPLICIT] 直接返回工具结果，未调用模型")
-        else:
-            messages.append({"role": "assistant", "content": f"【实时信息】{tool_result}"})
-            assistant_message = deepseek_service.chat(messages, tools=None, tool_choice="none")
-            final_reply = assistant_message.content
-            logger.info(f"[MODEL_CALL] 调用了模型（隐式降级）")
-    else:
-        MAX_TOOL_ROUNDS = 1
-        tool_round = 0
-        assistant_message = deepseek_service.chat(messages, tools=TOOLS, tool_choice="auto")
-        messages.append(assistant_message.model_dump() if hasattr(assistant_message, 'model_dump') else {"role": "assistant", "content": assistant_message.content})
-        logger.info(f"[MODEL_CALL] 调用了模型（显式工具）")
-
-        while assistant_message.tool_calls and tool_round < MAX_TOOL_ROUNDS:
+    try:
+        assistant_message = model_service.chat(messages, tools=TOOLS, tool_choice="auto")
+        if hasattr(assistant_message, 'tool_calls') and assistant_message.tool_calls:
+            messages.append(assistant_message)
             for tool_call in assistant_message.tool_calls:
                 tool_name = tool_call.function.name
                 arguments = json.loads(tool_call.function.arguments)
@@ -587,46 +501,42 @@ async def text_chat(request: ChatRequest):
                     "tool_call_id": tool_call.id,
                     "content": tool_result
                 })
-            tool_round += 1
-            assistant_message = deepseek_service.chat(messages, tools=TOOLS, tool_choice="auto")
-            messages.append(assistant_message.model_dump() if hasattr(assistant_message, 'model_dump') else {"role": "assistant", "content": assistant_message.content})
-
-        final_reply = assistant_message.content if assistant_message.content else "抱歉，我无法处理当前请求。"
-        final_reply = validate_and_fix_reply(user_msg, final_reply, tool_result if 'tool_result' in locals() else None)
+            final_message = model_service.chat(messages, tools=TOOLS, tool_choice="auto")
+            final_reply = final_message.content if final_message and final_message.content else "抱歉，我无法处理您的请求。"
+        else:
+            final_reply = assistant_message.content if assistant_message else "抱歉，我无法处理。"
+    except Exception as e:
+        logger.error(f"对话异常: {e}")
+        fallback = model_service._local_chat(messages)
+        final_reply = fallback.content if fallback else "抱歉，我现在遇到了一点问题。"
 
     await save_message(user_id, session_id, "user", user_msg)
     await save_message(user_id, session_id, "assistant", final_reply)
 
     if len(history) == 0:
-        new_title = user_msg[:30] + ("..." if len(user_msg) > 30 else "")
+        new_title = user_msg[:30] + ("..." if len(user_msg)>30 else "")
         await database.execute("UPDATE sessions SET title = :title WHERE id = :session_id",
-                               values={"title": new_title, "session_id": session_id})
+                               {"title": new_title, "session_id": session_id})
 
-    logger.info(f"[RESPONSE] 回复长度: {len(final_reply)} 字符")
     return ChatResponse(response=final_reply, session_id=session_id)
 
-# ========== 语音接口 ==========
 @app.post("/chat/text-to-speech")
-async def text_to_speech_only(request: TextToSpeechRequest):
-    audio_bytes = await audio_handler.text_to_speech(request.text, request.voice)
-    audio_b64 = audio_handler.audio_to_base64(audio_bytes) if audio_bytes else ""
-    return {"audio_response": audio_b64}
+async def text_to_speech_only(req: TextToSpeechRequest):
+    audio_bytes = await audio_handler.text_to_speech(req.text, req.voice)
+    b64 = audio_handler.audio_to_base64(audio_bytes) if audio_bytes else ""
+    return {"audio_response": b64}
 
 @app.post("/chat/voice")
 async def voice_chat(audio: UploadFile = File(...), user_id: str = Form("default_user"), session_id: Optional[int] = Form(None)):
-    try:
-        audio_bytes = await audio.read()
-        user_text = audio_handler.speech_to_text(audio_bytes)
-        if not user_text:
-            return JSONResponse(status_code=400, content={"error": "无法识别语音"})
-        chat_req = ChatRequest(message=user_text, user_id=user_id, session_id=session_id)
-        chat_res = await text_chat(chat_req)
-        audio_out = await audio_handler.text_to_speech(chat_res.response)
-        audio_b64 = audio_handler.audio_to_base64(audio_out) if audio_out else ""
-        return {"recognized_text": user_text, "ai_response": chat_res.response, "audio_base64": audio_b64, "session_id": chat_res.session_id}
-    except Exception as e:
-        logger.error(f"语音聊天错误: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    audio_bytes = await audio.read()
+    user_text = audio_handler.speech_to_text(audio_bytes)
+    if not user_text:
+        return JSONResponse(status_code=400, content={"error": "无法识别语音"})
+    chat_req = ChatRequest(message=user_text, user_id=user_id, session_id=session_id)
+    chat_res = await text_chat(chat_req)
+    audio_out = await audio_handler.text_to_speech(chat_res.response)
+    b64 = audio_handler.audio_to_base64(audio_out) if audio_out else ""
+    return {"recognized_text": user_text, "ai_response": chat_res.response, "audio_base64": b64, "session_id": chat_res.session_id}
 
 @app.get("/web", response_class=HTMLResponse)
 async def web_chat(request: Request):

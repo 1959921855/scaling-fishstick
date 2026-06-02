@@ -1,0 +1,756 @@
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.templating import Jinja2Templates
+from contextlib import asynccontextmanager
+from pydantic import BaseModel
+from typing import Optional, List, Dict
+from openai import OpenAI
+from dotenv import load_dotenv
+import uvicorn
+import os
+import logging
+import json
+import re
+import requests
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+# 可选股票历史依赖
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+
+from app.audio_handler import AudioHandler
+from app.database import (
+    database, init_db, save_message, get_session_messages, get_user_sessions,
+    create_session, delete_session, delete_message_by_id, get_session_last_message
+)
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+search_cache = {}
+
+class ChatRequest(BaseModel):
+    message: str
+    user_id: Optional[str] = "default_user"
+    session_id: Optional[int] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    session_id: int
+    message_id: Optional[int] = None
+
+class TextToSpeechRequest(BaseModel):
+    text: str
+    voice: Optional[str] = "zh-CN-XiaoxiaoNeural"
+
+class NewSessionRequest(BaseModel):
+    user_id: str = "default_user"
+    title: Optional[str] = "新对话"
+
+# ========== 本地 Ollama 服务 ==========
+class DeepSeekService:
+    def __init__(self):
+        self.client = OpenAI(
+            api_key="ollama",
+            base_url="http://localhost:11434/v1"
+        )
+
+    def chat(self, messages: List[Dict], tools: Optional[List[Dict]] = None, tool_choice: str = "auto") -> any:
+        try:
+            response = self.client.chat.completions.create(
+                model="deepseek-r1:1.5b",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=500,
+            )
+            return response.choices[0].message
+        except Exception as e:
+            logger.error(f"本地模型错误: {e}")
+            class DummyMessage:
+                def __init__(self, content):
+                    self.content = content
+                    self.tool_calls = None
+            return DummyMessage("抱歉，我现在遇到了一点问题。")
+
+# ========== 工具定义（保留，但不使用） ==========
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "查询指定地点的天气信息",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "城市名称"},
+                    "date": {"type": "string", "description": "日期，今天/明天/后天，默认今天"}
+                },
+                "required": ["city"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "联网搜索实时信息",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键词"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_news",
+            "description": "搜索新闻资讯",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "新闻关键词"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stock",
+            "description": "查询股票实时行情或历史行情，支持A股、港股、美股及大盘指数",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "股票代码或名称"},
+                    "date": {"type": "string", "description": "可选，查询历史日期"}
+                },
+                "required": ["symbol"],
+            },
+        },
+    }
+]
+
+# ---------- 辅助函数 ----------
+def split_into_chunks(text: str, chunk_size: int = 600) -> List[str]:
+    if len(text) <= chunk_size:
+        return [text]
+    chunks = []
+    entries = text.split('\n\n')
+    current = ""
+    for entry in entries:
+        if len(current) + len(entry) + 2 <= chunk_size:
+            current += (entry + "\n\n")
+        else:
+            if current:
+                chunks.append(current.strip())
+            current = entry + "\n\n"
+    if current:
+        chunks.append(current.strip())
+    return chunks
+
+def remove_date_words(text: str) -> str:
+    date_words = ["今天", "明天", "后天", "昨日", "明日", "前天"]
+    for w in date_words:
+        text = text.replace(w, "")
+    return text.strip()
+
+def get_today_str() -> str:
+    today = datetime.now(ZoneInfo("Asia/Shanghai"))
+    return f"{today.year}年{today.month}月{today.day}日"
+
+# ========== 通用搜索（自动读取 HTTPS_PROXY 环境变量） ==========
+async def web_search(query: str, max_results: int = 8) -> List[tuple]:
+    from ddgs import DDGS
+    # 读取超时设置
+    timeout = int(os.getenv("DDGS_TIMEOUT", 12))
+    try:
+        # 不传 proxies，完全依赖环境变量 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY
+        with DDGS(timeout=timeout) as ddgs:
+            raw = list(ddgs.text(query, max_results=max_results))
+    except Exception as e:
+        logger.error(f"搜索失败: {e}")
+        return []
+
+    spam_domains = [
+        "qindh.com", "bing.com", "microsoft.com", "yahoo.com", "baidu.com",
+        "so.com", "sogou.com", "doubao.com", "yidianzixun.com", "zhihu.com",
+        "taobao.com", "jd.com", "pinduoduo.com"
+    ]
+    clean = []
+    for r in raw:
+        href = r.get('href', '')
+        title = r.get('title', '')
+        body = r.get('body', '')
+        if any(d in href for d in spam_domains):
+            continue
+        if len(body) < 30 or len(title) < 5:
+            continue
+        if "首页" in title and "新闻" not in title:
+            continue
+        clean.append((title, body, href))
+    return clean
+
+def format_search_results(query: str, results: List[tuple]) -> str:
+    if not results:
+        return f"⚠️ 未找到关于“{query}”的信息。"
+    lines = [f"🔍 搜索“{query}”结果："]
+    for idx, (title, body, link) in enumerate(results[:5], 1):
+        lines.append(f"{idx}. {title}")
+        lines.append(f"   {body[:120]}...")
+    return "\n".join(lines)
+
+def format_news_results(query: str, results: List[tuple], today: str) -> str:
+    if not results:
+        return f"📰 未找到关于“{query}”的最新新闻。"
+    seen = set()
+    unique = []
+    for t, b, l in results:
+        if t not in seen:
+            seen.add(t)
+            unique.append((t, b, l))
+    recent, others = [], []
+    for item in unique:
+        if today in item[0] + item[1] or "今天" in item[0] + item[1]:
+            recent.append(item)
+        else:
+            others.append(item)
+    final = (recent + others)[:6]
+    lines = [f"📰 {today} 关于“{query}”的新闻："]
+    for idx, (title, body, link) in enumerate(final, 1):
+        lines.append(f"{idx}. {title}")
+        clean_body = re.sub(r'[\\*]', '', body)[:100].strip()
+        if clean_body:
+            lines.append(f"   {clean_body}")
+    return "\n".join(lines)
+
+# ========== 股票行情查询（保持不变） ==========
+NAME_TO_CODE = {
+    "工商银行": "sh601398", "建设银行": "sh601939", "农业银行": "sh601288",
+    "中国银行": "sh601988", "招商银行": "sh600036", "交通银行": "sh601328",
+    "邮储银行": "sh601658", "兴业银行": "sh601166", "浦发银行": "sh600000",
+    "民生银行": "sh600016", "中信银行": "sh601998", "光大银行": "sh601818",
+    "平安银行": "sz000001", "宁波银行": "sz002142", "江苏银行": "sh600919",
+    "中国平安": "sh601318", "中国人寿": "sh601628", "中国太保": "sh601601",
+    "新华保险": "sh601336", "中信证券": "sh600030", "华泰证券": "sh601688",
+    "国泰君安": "sh601211", "海通证券": "sh600837", "贵州茅台": "sh600519",
+    "五粮液": "sz000858", "泸州老窖": "sz000568", "洋河股份": "sz002304",
+    "山西汾酒": "sh600809", "宁德时代": "sz300750", "比亚迪": "sz002594",
+    "美的集团": "sz000333", "格力电器": "sz000651", "海康威视": "sz002415",
+    "立讯精密": "sz002475", "京东方A": "sz000725", "中芯国际": "sh688981",
+    "腾讯": "hk00700", "阿里巴巴": "hk09988", "美团": "hk03690",
+    "中国石油": "sh601857", "中国石化": "sh600028", "中国神华": "sh601088",
+    "中国建筑": "sh601668", "万华化学": "sh600309", "伊利股份": "sh600887",
+    "海尔智家": "sh600690", "三一重工": "sh600031", "恒瑞医药": "sh600276",
+    "迈瑞医疗": "sz300760", "药明康德": "sh603259", "茅台": "sh600519",
+    "招商银": "sh600036", "工商银": "sh601398", "中国银": "sh601988",
+    "建设银": "sh601939", "农业银": "sh601288", "交通银": "sh601328",
+    "平安": "sz000001", "宁王": "sz300750", "迪王": "sz002594",
+    "上证指数": "sh000001", "深证成指": "sz399001", "创业板指": "sz399006",
+    "上证": "sh000001", "深证": "sz399001", "创业板": "sz399006",
+}
+
+def clean_stock_symbol(raw: str) -> str:
+    if not raw:
+        return ""
+    cleaned = re.sub(r'昨天|前天|今日|明日|股票|股价|行情|查一下|的|了|吗|呢', '', raw).strip()
+    if not cleaned:
+        return raw
+    if cleaned in NAME_TO_CODE:
+        return cleaned
+    for full_name in NAME_TO_CODE.keys():
+        if full_name.startswith(cleaned):
+            return full_name
+    return cleaned
+
+async def get_stock_quote(symbol: str, date: Optional[str] = None) -> str:
+    if not symbol:
+        return "请提供股票代码或名称"
+    original_symbol = symbol
+    symbol = clean_stock_symbol(symbol)
+    if symbol in NAME_TO_CODE:
+        code = NAME_TO_CODE[symbol]
+    else:
+        code = symbol
+        if symbol.isdigit() and len(symbol) == 6:
+            if symbol.startswith('6'):
+                code = f"sh{symbol}"
+            else:
+                code = f"sz{symbol}"
+        elif symbol.isdigit() and len(symbol) == 5:
+            code = f"hk{symbol}"
+        else:
+            code = symbol.upper()
+    target_date = None
+    if date:
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        if date == "昨天":
+            target_date = today - timedelta(days=1)
+        elif date == "前天":
+            target_date = today - timedelta(days=2)
+        else:
+            try:
+                target_date = datetime.strptime(date, "%Y-%m-%d").date()
+            except:
+                pass
+    # 大盘指数
+    if code in ['sh000001', 'sz399001', 'sz399006']:
+        if target_date:
+            return f"📈 {original_symbol} 的历史数据暂不支持，以下为实时行情：\n"
+        url = f"https://hq.sinajs.cn/list={code}"
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"}
+        try:
+            resp = requests.get(url, headers=headers, timeout=5)
+            resp.encoding = 'gbk'
+            data = resp.text
+            if not data or len(data) < 10:
+                return f"未找到 {original_symbol} 的指数数据。"
+            parts = data.split('"')
+            if len(parts) < 2:
+                return f"无法解析 {original_symbol} 数据。"
+            content = parts[1]
+            fields = content.split(',')
+            if len(fields) < 10:
+                return f"数据不完整，请稍后再试。"
+            name = fields[0]
+            current = float(fields[3]) if len(fields) > 3 else 0
+            yesterday = float(fields[2]) if len(fields) > 2 else 0
+            change = current - yesterday
+            change_percent = (change / yesterday) * 100 if yesterday != 0 else 0
+            return f"{name}\n最新 {current:.2f} 点\n涨跌 {change:+.2f} ({change_percent:+.2f}%)"
+        except Exception as e:
+            logger.error(f"指数查询异常: {e}")
+            return f"指数查询失败，请稍后再试。"
+    # 个股
+    if target_date and YFINANCE_AVAILABLE:
+        try:
+            yf_code = code
+            if code.startswith('sh'):
+                yf_code = code[2:] + ".SS"
+            elif code.startswith('sz'):
+                yf_code = code[2:] + ".SZ"
+            elif code.startswith('hk'):
+                yf_code = code[2:] + ".HK"
+            else:
+                yf_code = code
+            ticker = yf.Ticker(yf_code)
+            start = target_date - timedelta(days=1)
+            end = target_date + timedelta(days=1)
+            hist = ticker.history(start=start, end=end)
+            if not hist.empty:
+                for idx, row in hist.iterrows():
+                    if idx.date() == target_date:
+                        close = row['Close']
+                        open_price = row['Open']
+                        change = close - open_price
+                        change_percent = (change / open_price) * 100 if open_price != 0 else 0
+                        name = symbol if symbol in NAME_TO_CODE else code
+                        return f"{name} {target_date.strftime('%Y-%m-%d')}\n收盘价 {close:.2f} 元\n涨跌 {change:+.2f} ({change_percent:+.2f}%)"
+                return f"未找到 {original_symbol} 在 {target_date.strftime('%Y-%m-%d')} 的交易数据（可能休市）。"
+        except Exception as e:
+            logger.error(f"历史股票查询异常: {e}")
+    # 实时行情
+    url = f"https://hq.sinajs.cn/list={code}"
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        resp.encoding = 'gbk'
+        data = resp.text
+        if not data or len(data) < 10:
+            return f"未找到股票 '{original_symbol}'，请检查代码或名称。"
+        parts = data.split('"')
+        if len(parts) < 2:
+            return f"无法解析股票 '{original_symbol}' 数据。"
+        content = parts[1]
+        fields = content.split(',')
+        if len(fields) < 10:
+            return f"数据不完整，请稍后再试。"
+        name = fields[0]
+        current = float(fields[3])
+        yesterday = float(fields[2])
+        change = current - yesterday
+        change_percent = (change / yesterday) * 100 if yesterday != 0 else 0
+        volume = int(float(fields[8])) if len(fields) > 8 else 0
+        if code.startswith(('sh', 'sz')):
+            return f"{name}\n最新价 {current:.2f} 元\n涨跌 {change:+.2f} ({change_percent:+.2f}%)\n成交量 {volume} 手"
+        elif code.startswith('hk'):
+            return f"{name}\n最新价 {current:.2f} 港元\n涨跌 {change:+.2f} ({change_percent:+.2f}%)"
+        else:
+            return f"{name}\n最新价 {current:.2f} 美元\n涨跌 {change:+.2f} ({change_percent:+.2f}%)"
+    except Exception as e:
+        logger.error(f"股票查询异常: {e}")
+        return f"股票查询失败，请稍后再试。"
+
+# ========== 天气函数 ==========
+async def get_weather_tool(city: str, date_type: str = "today") -> str:
+    if not city:
+        return "请提供城市名"
+    try:
+        GAODE_API_KEY = os.getenv("GAODE_API_KEY")
+        if not GAODE_API_KEY:
+            return "天气服务配置错误"
+        geo_url = "https://restapi.amap.com/v3/geocode/geo"
+        geo_resp = requests.get(geo_url, params={"address": city, "key": GAODE_API_KEY}, timeout=10)
+        geo_data = geo_resp.json()
+        if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
+            return f"未找到城市 {city}"
+        adcode = geo_data["geocodes"][0]["adcode"]
+        if date_type == "today":
+            weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
+            params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "base"}
+            resp = requests.get(weather_url, params=params, timeout=10)
+            data = resp.json()
+            if data.get("status") != "1":
+                return f"无法获取 {city} 天气"
+            live = data["lives"][0]
+            return f"{city} 当前天气：{live['weather']}，气温 {live['temperature']}℃，{live['winddirection']}风 {live['windpower']}级，湿度 {live['humidity']}%。"
+        else:
+            weather_url = "https://restapi.amap.com/v3/weather/weatherInfo"
+            params = {"city": adcode, "key": GAODE_API_KEY, "extensions": "all"}
+            resp = requests.get(weather_url, params=params, timeout=10)
+            data = resp.json()
+            if data.get("status") != "1":
+                return f"无法获取 {city} 预报"
+            forecasts = data["forecasts"][0]["casts"]
+            idx_map = {"tomorrow": 1, "dayafter": 2}
+            idx = idx_map.get(date_type, 0)
+            day_label = {"tomorrow": "明天", "dayafter": "后天"}.get(date_type, "今天")
+            if idx >= len(forecasts):
+                return f"无法获取 {city} {day_label} 天气"
+            fc = forecasts[idx]
+            return f"{city}{day_label}天气：{fc['dayweather']}，白天{fc['daytemp']}℃，夜间{fc['nighttemp']}℃，{fc['daywind']}风{fc['daypower']}级。"
+    except Exception as e:
+        logger.error(f"天气异常: {e}")
+        return "天气服务暂时不可用"
+
+# ========== 工具执行入口 ==========
+async def execute_tool(tool_name: str, arguments: dict) -> str:
+    logger.info(f"[TOOL_CALL] {tool_name} {arguments}")
+    if tool_name == "get_weather":
+        return await get_weather_tool(arguments.get("city"), arguments.get("date", "today"))
+    elif tool_name == "web_search":
+        query = arguments.get("query")
+        if not query:
+            return "请提供搜索词"
+        results = await web_search(query)
+        return format_search_results(query, results) if results else f"⚠️ 未找到关于 '{query}' 的信息。"
+    elif tool_name == "search_news":
+        query = arguments.get("query")
+        if not query:
+            return "请提供新闻关键词"
+        query = remove_date_words(query)
+        results = await web_search(f"{query} 新闻", max_results=10)
+        return format_news_results(query, results, get_today_str())
+    elif tool_name == "get_stock":
+        return await get_stock_quote(arguments.get("symbol"), arguments.get("date"))
+    return "未知工具"
+
+# ========== 时间函数 ==========
+def get_current_time() -> str:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    hour = now.hour
+    am_pm = "上午" if hour < 12 else "下午"
+    hour_12 = hour if hour <= 12 else hour - 12
+    if hour_12 == 0: hour_12 = 12
+    return f"现在是{now.year}年{now.month}月{now.day}日 {am_pm}{hour_12}点{now.minute:02d}分，{weekdays[now.weekday()]}"
+
+def get_relative_date(offset: int) -> str:
+    target = datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=offset)
+    wd = ["星期一","星期二","星期三","星期四","星期五","星期六","星期日"]
+    label = "明天" if offset==1 else "后天" if offset==2 else f"{offset}天后"
+    return f"{label}是{target.month}月{target.day}日，{wd[target.weekday()]}"
+
+def get_weekday_of_date(month: int, day: int) -> str:
+    try:
+        target = datetime.now(ZoneInfo("Asia/Shanghai")).replace(month=month, day=day)
+        wd = ["星期一","星期二","星期三","星期四","星期五","星期六","星期日"]
+        return f"{month}月{day}日是{wd[target.weekday()]}"
+    except:
+        return f"{month}月{day}日不存在哦"
+
+# ========== 隐式调用（关键词触发） ==========
+WEATHER_KEYWORDS = {"天气", "温度", "气温"}
+EXCLUDE_WORDS = {
+    "现在", "请问", "知道", "那里", "这里", "什么", "今天", "明天", "后天", "昨日", "明日",
+    "查询", "预报", "风力", "湿度", "气象", "几点", "时间", "日期", "星期几", "几号",
+    "怎么", "怎样", "怎么样", "如何", "哪儿", "哪里", "哪", "什么样", "为何", "为什么",
+    "是", "的", "了", "吗", "呢", "吧", "啊", "呀", "嘛", "哦", "嗯", "么",
+    "一个", "一下", "一些", "这个", "那个", "哪个", "什么样", "如何", "多少",
+    "当前", "咋样", "到底", "啊啊", "哈哈", "嘿嘿", "哎", "唉", "哟", "噢", "唔",
+    "你好", "您好", "你们", "我们", "他们", "大家", "朋友", "帮忙", "请", "能", "可以",
+    "是否", "是不是", "为啥", "为何", "咋", "嘛", "咯"
+}
+
+def clean_region(raw: str) -> str:
+    if not raw:
+        return ""
+    for w in WEATHER_KEYWORDS:
+        raw = raw.replace(w, "")
+    for word in sorted(EXCLUDE_WORDS, key=len, reverse=True):
+        raw = raw.replace(word, "")
+    raw = re.sub(r'[^\u4e00-\u9fa5]', '', raw)
+    m = re.search(r"([\u4e00-\u9fa5]{2,})", raw)
+    return m.group(1) if m else ""
+
+def extract_region_and_date(text: str):
+    date_map = {"今天":"today","明天":"tomorrow","后天":"dayafter","明日":"tomorrow"}
+    date_type = None
+    for kw, dt in date_map.items():
+        if kw in text:
+            date_type = dt
+            break
+    clean = text
+    for kw in date_map:
+        clean = clean.replace(kw, "")
+    m = re.search(r"([\u4e00-\u9fa5]{2,})", clean)
+    region = m.group(1) if m else None
+    if region and (region in EXCLUDE_WORDS or len(region) < 2):
+        region = None
+    return region, date_type
+
+async def get_temperature_for_date(city: str, date_type: str, temp_type: str) -> str:
+    result = await execute_tool("get_weather", {"city": city, "date": date_type})
+    day_label_map = {"today": "今天", "tomorrow": "明天", "dayafter": "后天"}
+    day_label = day_label_map.get(date_type, "今天")
+    if temp_type == "max":
+        match = re.search(r"白天(\d+)℃", result)
+        if match:
+            return f"{city}{day_label}的最高温度是 {match.group(1)}℃。"
+    elif temp_type == "min":
+        match = re.search(r"夜间(\d+)℃", result)
+        if match:
+            return f"{city}{day_label}的最低温度是 {match.group(1)}℃。"
+    return result
+
+async def implicit_tool_call(user_msg: str) -> tuple[bool, str | None]:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    weekdays = ["星期一","星期二","星期三","星期四","星期五","星期六","星期日"]
+    
+    # 年份、月份
+    if any(k in user_msg for k in ["哪一年","今年哪一年","年份"]):
+        return True, f"今年是{now.year}年。"
+    if any(k in user_msg for k in ["几月","月份"]):
+        return True, f"现在是{now.month}月。"
+    
+    # 具体日期
+    match = re.search(r"(\d{1,2})\s*[月\.]\s*(\d{1,2})\s*.*?(?:星期|周)", user_msg)
+    if match:
+        return True, get_weekday_of_date(int(match.group(1)), int(match.group(2)))
+
+    # 时间
+    if any(k in user_msg for k in ["几点","时间","日期","星期几","几号","周几"]):
+        if "明天" in user_msg:
+            return True, get_relative_date(1)
+        elif "后天" in user_msg:
+            return True, get_relative_date(2)
+        else:
+            return True, get_current_time()
+
+    # 天气
+    if any(k in user_msg for k in WEATHER_KEYWORDS):
+        raw_reg, date_type = extract_region_and_date(user_msg)
+        region = clean_region(raw_reg) if raw_reg else "南京"
+        date_type = date_type or "today"
+        return True, await get_weather_tool(region, date_type)
+
+    # 新闻
+    if "新闻" in user_msg:
+        query = re.sub(r'(新闻|资讯|报道)', '', user_msg).strip()
+        city = next((c for c in ["南京","北京","上海","广州","深圳","杭州","成都","武汉","西安","苏州","天津","重庆"] if c in user_msg), None)
+        query = city or query or "今日热点"
+        return True, await execute_tool("search_news", {"query": query})
+
+    # 股票
+    if re.search(r"股票|股价|行情|大盘|指数|A股|走势|上证|深证|创业板", user_msg):
+        symbol = re.search(r"(上证指数|深证成指|创业板指|大盘|A股走势|股市走势|纳斯达克|道琼斯)", user_msg)
+        if symbol:
+            sym = symbol.group(1)
+            sym = "上证指数" if sym in ("大盘","A股走势","股市走势") else sym
+            return True, await execute_tool("get_stock", {"symbol": sym})
+        m = re.search(r"([A-Z0-9\u4e00-\u9fa5]+)(?:股票|股价|行情)", user_msg)
+        if m:
+            symbol = m.group(1).strip()
+        else:
+            m = re.search(r"(?:股票|股价|行情)[：:]*\s*([A-Z0-9\u4e00-\u9fa5]+)", user_msg)
+            if m:
+                symbol = m.group(1).strip()
+            else:
+                words = user_msg.split()
+                symbol = next((w for w in reversed(words) if w not in ["股票","股价","行情","查","一下","什么"]), None)
+        if symbol:
+            return True, await execute_tool("get_stock", {"symbol": symbol})
+
+    # 通用搜索
+    if re.search(r"搜索|查一下|搜一下|百度", user_msg):
+        query = re.sub(r"(搜索|查一下|搜一下|百度)\s*", "", user_msg).strip()
+        if query:
+            return True, await execute_tool("web_search", {"query": query})
+
+    return False, None
+
+# ========== 系统提示词 ==========
+SYSTEM_PROMPT = (
+    "你是小暖，面向老年人的语音助手。说话亲切简短，用“您”，不用特殊符号。"
+)
+
+def build_direct_reply(user_msg: str, tool_result: str) -> str:
+    if "新闻" in user_msg or "搜索" in user_msg or "查一下" in user_msg:
+        return tool_result
+    if any(k in user_msg for k in ["几点","时间","日期","星期几","几号","周几"]):
+        return tool_result
+    if any(k in user_msg for k in WEATHER_KEYWORDS):
+        return f"好的，{tool_result}。您要注意天气变化，保重身体哦。"
+    return tool_result
+
+# ========== 全局实例 ==========
+deepseek_service = None
+audio_handler = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global deepseek_service, audio_handler
+    logger.info("初始化...")
+    init_db()
+    await database.connect()
+    deepseek_service = DeepSeekService()
+    audio_handler = AudioHandler()
+    yield
+    await database.disconnect()
+
+app = FastAPI(title="语音陪聊智能体", version="14.3", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+templates = Jinja2Templates(directory="templates")
+
+# ========== 会话管理 API ==========
+@app.post("/session/new")
+async def new_session(request: NewSessionRequest):
+    sid = await create_session(request.user_id, request.title)
+    return {"session_id": sid, "title": request.title}
+
+@app.get("/sessions/{user_id}")
+async def list_sessions(user_id: str):
+    sessions = await get_user_sessions(user_id)
+    for s in sessions:
+        last = await get_session_last_message(s["id"])
+        s["preview"] = (last["content"][:50]+"...") if last and len(last["content"])>50 else (last["content"] if last else "暂无消息")
+    return {"sessions": sessions}
+
+@app.get("/session/{session_id}/messages")
+async def get_messages(session_id: int):
+    return {"messages": await get_session_messages(session_id)}
+
+@app.delete("/session/{session_id}")
+async def del_session(session_id: int, user_id: str = "default_user"):
+    if not await delete_session(session_id, user_id):
+        raise HTTPException(404, "Session not found")
+    return {"status": "deleted"}
+
+@app.delete("/conversation/message/{message_id}")
+async def delete_message_api(message_id: int, user_id: str = "default_user"):
+    if not await delete_message_by_id(message_id, user_id):
+        raise HTTPException(404, "Message not found")
+    return {"status": "deleted"}
+
+@app.get("/voices")
+async def get_voices():
+    return {"voices": await audio_handler.get_voices()}
+
+@app.post("/chat/text", response_model=ChatResponse)
+async def text_chat(request: ChatRequest):
+    user_id = request.user_id
+    user_msg = request.message
+    session_id = request.session_id
+
+    if user_msg.strip() in ["继续","下一条","更多","next"] and session_id and session_id in search_cache:
+        cache = search_cache[session_id]
+        if cache["current_index"] < len(cache["chunks"]):
+            chunk = cache["chunks"][cache["current_index"]]
+            cache["current_index"] += 1
+            reply = chunk
+            if cache["current_index"] < len(cache["chunks"]):
+                reply += "\n\n（还有更多，回复“继续”查看下一段）"
+            else:
+                del search_cache[session_id]
+            return ChatResponse(response=reply, session_id=session_id)
+        else:
+            del search_cache[session_id]
+            return ChatResponse(response="没有更多内容了。", session_id=session_id)
+
+    implicit, tool_result = await implicit_tool_call(user_msg)
+
+    if session_id is None:
+        session_id = await create_session(user_id, "新对话")
+
+    history = await get_session_messages(session_id, limit=10)
+    if len(history) > 10:
+        history = history[-10:]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for msg in history:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": user_msg})
+
+    final_reply = ""
+    if implicit:
+        if tool_result and "错误" not in tool_result and "不可用" not in tool_result:
+            if len(tool_result) > 600:
+                chunks = split_into_chunks(tool_result, 600)
+                if len(chunks) > 1:
+                    search_cache[session_id] = {"chunks": chunks, "current_index": 1}
+                    final_reply = chunks[0] + f"\n\n（共{len(chunks)}段，回复“继续”查看下一段）"
+                else:
+                    final_reply = build_direct_reply(user_msg, tool_result)
+            else:
+                final_reply = build_direct_reply(user_msg, tool_result)
+        else:
+            messages.append({"role": "assistant", "content": f"【实时信息】{tool_result}"})
+            assistant_message = deepseek_service.chat(messages, tools=None, tool_choice="none")
+            final_reply = assistant_message.content
+    else:
+        assistant_message = deepseek_service.chat(messages, tools=None, tool_choice="none")
+        final_reply = assistant_message.content if assistant_message.content else "抱歉，我无法处理。"
+
+    await save_message(user_id, session_id, "user", user_msg)
+    await save_message(user_id, session_id, "assistant", final_reply)
+
+    if len(history) == 0:
+        new_title = user_msg[:30] + ("..." if len(user_msg)>30 else "")
+        await database.execute("UPDATE sessions SET title = :title WHERE id = :session_id",
+                               {"title": new_title, "session_id": session_id})
+
+    return ChatResponse(response=final_reply, session_id=session_id)
+
+@app.post("/chat/text-to-speech")
+async def text_to_speech_only(req: TextToSpeechRequest):
+    audio_bytes = await audio_handler.text_to_speech(req.text, req.voice)
+    b64 = audio_handler.audio_to_base64(audio_bytes) if audio_bytes else ""
+    return {"audio_response": b64}
+
+@app.post("/chat/voice")
+async def voice_chat(audio: UploadFile = File(...), user_id: str = Form("default_user"), session_id: Optional[int] = Form(None)):
+    audio_bytes = await audio.read()
+    user_text = audio_handler.speech_to_text(audio_bytes)
+    if not user_text:
+        return JSONResponse(status_code=400, content={"error": "无法识别语音"})
+    chat_req = ChatRequest(message=user_text, user_id=user_id, session_id=session_id)
+    chat_res = await text_chat(chat_req)
+    audio_out = await audio_handler.text_to_speech(chat_res.response)
+    b64 = audio_handler.audio_to_base64(audio_out) if audio_out else ""
+    return {"recognized_text": user_text, "ai_response": chat_res.response, "audio_base64": b64, "session_id": chat_res.session_id}
+
+@app.get("/web", response_class=HTMLResponse)
+async def web_chat(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
