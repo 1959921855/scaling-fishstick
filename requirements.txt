@@ -3,13 +3,10 @@ uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 openai>=1.54.0
 python-dotenv==1.0.0
-gTTS==2.5.4
+edge-tts
 sqlalchemy>=2.0.0
 databases[aiosqlite]>=0.9.0
 jinja2>=3.1.0
-emoji>=2.14.0
 httpx>=0.24.0
-edge-tts
 yfinance>=0.2.40
-ddgs>=0.2.0
 requests>=2.31.0
