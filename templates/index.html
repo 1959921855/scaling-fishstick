@@ -464,7 +464,6 @@
     }
 
     function stopListen() {
-        // 安卓环境不需要手动停止，原生会自动结束
         if (isAndroidApp) return;
         if (recognition && isListening) {
             recognition.stop();
@@ -668,8 +667,9 @@
         await sendMessage(text);
     };
 
-    // ========== 修改后的按钮事件（仅 click） ==========
+    // ========== 修改后的按钮事件（仅 click，增加调试 alert） ==========
     voiceBtn.addEventListener('click', () => {
+        alert("按钮被点击了！");  // 调试用，确认事件触发后可删除
         if (isCallMode) return;
         startListen();
     });
