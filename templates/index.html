@@ -407,9 +407,7 @@
             currentAudio = null;
         }
         if (recognition && isListening) {
-            try {
-                recognition.stop();
-            } catch(e) {}
+            try { recognition.stop(); } catch(e) {}
             isListening = false;
         }
         waitingForReply = false;
@@ -437,6 +435,11 @@
         callLoopActive = false;
     }
 
+    // 检测 Android 桥接是否可用
+    function isAndroidBridgeReady() {
+        return window.AndroidSpeech && typeof window.AndroidSpeech.startSpeechRecognition === 'function';
+    }
+
     function startListen() {
         if (!isCallMode && currentAudio) {
             currentAudio.pause();
@@ -444,33 +447,32 @@
             currentAudio = null;
         }
         if (recognition && isListening) {
-            try {
-                recognition.stop();
-            } catch(e) {}
+            try { recognition.stop(); } catch(e) {}
             isListening = false;
         }
-        if (!recognition && !isAndroidApp) {
+        if (!recognition && !isAndroidBridgeReady()) {
             initRecognition();
         }
         if (isCallMode) {
             waitingForReply = false;
         }
         onUserActivity();
-        if (isAndroidApp) {
-            AndroidSpeech.startSpeechRecognition();
+        if (isAndroidBridgeReady()) {
+            console.log("调用 Android 语音识别");
+            window.AndroidSpeech.startSpeechRecognition();
         } else if (recognition && !isListening) {
             recognition.start();
         }
     }
 
     function stopListen() {
-        if (isAndroidApp) return;
+        if (isAndroidBridgeReady()) return;
         if (recognition && isListening) {
             recognition.stop();
         }
     }
 
-    // 会话管理函数
+    // 会话管理
     async function loadSessions() {
         try {
             const res = await fetch(`/sessions/${USER_ID}?limit=50`);
@@ -575,9 +577,7 @@
             currentAudio = null;
         }
         if (recognition && isListening) {
-            try {
-                recognition.stop();
-            } catch(e) {}
+            try { recognition.stop(); } catch(e) {}
             isListening = false;
         }
         if (isCallMode) {
@@ -629,11 +629,10 @@
 
     let recognition = null;
     let isListening = false;
-    const isAndroidApp = typeof AndroidSpeech !== 'undefined';
 
     function initRecognition() {
         if (recognition) return;
-        if ('webkitSpeechRecognition' in window && !isAndroidApp) {
+        if ('webkitSpeechRecognition' in window && !isAndroidBridgeReady()) {
             recognition = new webkitSpeechRecognition();
             recognition.lang = 'zh-CN';
             recognition.continuous = false;
@@ -667,9 +666,8 @@
         await sendMessage(text);
     };
 
-    // ========== 修改后的按钮事件（仅 click，增加调试 alert） ==========
+    // 语音按钮（点击触发）
     voiceBtn.addEventListener('click', () => {
-        alert("按钮被点击了！");  // 调试用，确认事件触发后可删除
         if (isCallMode) return;
         startListen();
     });
