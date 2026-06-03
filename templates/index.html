@@ -464,7 +464,9 @@
     }
 
     function stopListen() {
-        if (recognition && isListening && !isAndroidApp) {
+        // 安卓环境不需要手动停止，原生会自动结束
+        if (isAndroidApp) return;
+        if (recognition && isListening) {
             recognition.stop();
         }
     }
@@ -500,7 +502,6 @@
                     if (confirm('确定删除此会话吗？')) {
                         await fetch(`/session/${sid}?user_id=${USER_ID}`, { method: 'DELETE' });
                         if (currentSessionId === sid) {
-                            // 删除的是当前会话，立即创建一个新会话（避免状态残留）
                             await createNewSession();
                         } else {
                             await loadSessions();
@@ -550,11 +551,8 @@
             });
             const data = await res.json();
             currentSessionId = data.session_id;
-            // 清空聊天区域并显示欢迎语
             messageBox.innerHTML = '<div class="message ai">你好呀，我们开始聊天吧～</div>';
-            // 刷新左侧会话列表
             await loadSessions();
-            // 滚动到底部
             messageBox.scrollTop = messageBox.scrollHeight;
             onUserActivity();
         } catch (err) { console.error(err); }
@@ -665,20 +663,16 @@
     }
 
     window.onAndroidSpeechResult = async (text) => {
+        console.log("安卓识别结果:", text);
         statusSpan.innerHTML = `📝 ${text}`;
         await sendMessage(text);
     };
 
-    voiceBtn.addEventListener('mousedown', () => {
+    // ========== 修改后的按钮事件（仅 click） ==========
+    voiceBtn.addEventListener('click', () => {
         if (isCallMode) return;
         startListen();
     });
-    voiceBtn.addEventListener('mouseup', () => {
-        if (isCallMode) return;
-        stopListen();
-    });
-    voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); if (!isCallMode) startListen(); });
-    voiceBtn.addEventListener('touchend', (e) => { e.preventDefault(); if (!isCallMode) stopListen(); });
 
     callBtn.addEventListener('click', () => {
         if (isCallMode) {
