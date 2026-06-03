@@ -14,6 +14,7 @@ import json
 import re
 import asyncio
 import httpx
+import traceback
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -56,7 +57,7 @@ class NewSessionRequest(BaseModel):
     user_id: str = "default_user"
     title: Optional[str] = "新对话"
 
-# ==================== 模型服务（带重试，错误返回前端） ====================
+# ==================== 模型服务（增强错误日志） ====================
 class ModelService:
     def __init__(self):
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -67,7 +68,7 @@ class ModelService:
         self.client = OpenAI(
             api_key=self.api_key,
             base_url="https://api.deepseek.com/v1",
-            timeout=20.0
+            timeout=30.0               # 增加超时
         )
 
     def chat(self, messages, tools=None, tool_choice="auto"):
@@ -87,12 +88,12 @@ class ModelService:
                 return response.choices[0].message
             except Exception as e:
                 last_exception = e
-                logger.error(f"❌ DeepSeek 调用失败 (尝试 {attempt+1}): 类型={type(e).__name__}, 详情={str(e)}")
+                logger.error(f"❌ DeepSeek 调用失败 (尝试 {attempt+1}): 类型={type(e).__name__}, repr={repr(e)}")
+                logger.error(traceback.format_exc())
                 if attempt == 0:
                     import time
                     time.sleep(1)
-        # 将错误详情返回给前端
-        error_detail = f"{type(last_exception).__name__}: {str(last_exception)}" if last_exception else "未知错误"
+        error_detail = f"{type(last_exception).__name__}: {repr(last_exception)}" if last_exception else "未知错误"
         logger.error(f"🚨 DeepSeek 全部重试失败: {error_detail}")
         class Dummy:
             def __init__(self, msg):
@@ -524,6 +525,29 @@ async def delete_message_api(message_id: int, user_id: str = "default_user"):
 @app.get("/voices")
 async def get_voices():
     return {"voices": await audio_handler.get_voices()}
+
+# ==================== 新增：测试接口 ====================
+@app.get("/test-deepseek")
+async def test_deepseek():
+    try:
+        response = model_service.client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": "你好"}],
+            max_tokens=50,
+            temperature=0.0,
+        )
+        return {"ok": True, "result": response.choices[0].message.content}
+    except Exception as e:
+        logger.error(f"测试 DeepSeek 连接失败: {type(e).__name__}: {repr(e)}")
+        return {"ok": False, "error": f"{type(e).__name__}: {repr(e)}"}
+
+@app.get("/test-env")
+async def test_env():
+    return {
+        "deepseek_key": bool(os.getenv("DEEPSEEK_API_KEY")),
+        "tavily_key": bool(os.getenv("TAVILY_API_KEY")),
+        "gaode_key": bool(os.getenv("GAODE_API_KEY")),
+    }
 
 # ==================== 核心对话（错误详情返回前端） ====================
 @app.post("/chat/text", response_model=ChatResponse)
