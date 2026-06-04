@@ -1,13 +1,11 @@
 import edge_tts
 import base64
 import hashlib
-import hmac
 import json
-import time
 import os
 import tempfile
+import time
 import requests
-from datetime import datetime, timezone, timedelta
 
 class AudioHandler:
     def __init__(self):
@@ -15,6 +13,9 @@ class AudioHandler:
         self.xf_appid = os.getenv("XF_APPID")
         self.xf_api_key = os.getenv("XF_API_KEY")
         self.xf_api_secret = os.getenv("XF_API_SECRET")
+
+        # 接口地址
+        self.xf_url = "https://api.xfyun.cn/v1/service/v1/iat"
 
     async def get_voices(self):
         voices = await edge_tts.list_voices(proxy=None)
@@ -34,27 +35,8 @@ class AudioHandler:
     def audio_to_base64(self, audio_bytes):
         return base64.b64encode(audio_bytes).decode('utf-8')
 
-    def _get_xf_url(self):
-        """生成讯飞鉴权URL"""
-        host = "ws-api.xfyun.cn"
-        path = "/v2/iat"
-        # 北京时间
-        tz = timezone(timedelta(hours=8))
-        date = datetime.now(tz).strftime("%a, %d %b %Y %H:%M:%S %Z")
-        signature_origin = f"host: {host}\ndate: {date}\nGET {path} HTTP/1.1"
-        signature = base64.b64encode(
-            hmac.new(
-                self.xf_api_secret.encode(),
-                signature_origin.encode(),
-                hashlib.sha256
-            ).digest()
-        ).decode()
-        authorization_origin = f'api_key="{self.xf_api_key}", algorithm="hmac-sha256", headers="host date request-line", signature="{signature}"'
-        authorization = base64.b64encode(authorization_origin.encode()).decode()
-        return f"ws://{host}{path}?authorization={authorization}&date={date}&host={host}"
-
     def speech_to_text(self, audio_bytes: bytes) -> str:
-        """使用讯飞语音听写将音频转为文字"""
+        """使用讯飞语音听写 REST API 将音频转为文字"""
         if not audio_bytes:
             return ""
 
@@ -65,57 +47,66 @@ class AudioHandler:
             tmp_path = tmp.name
 
         try:
-            # 读取音频数据
             with open(tmp_path, "rb") as f:
                 audio_data = f.read()
 
-            # 讯飞接口要求 base64
-            audio_base64 = base64.b64encode(audio_data).decode()
-
-            # 构建请求参数
+            # 参数
             params = {
-                "common": {"app_id": self.xf_appid},
-                "business": {
-                    "language": "zh_cn",
-                    "domain": "iat",
-                    "accent": "mandarin",
-                    "vad_eos": 3000,
-                },
-                "data": {
-                    "audio": audio_base64,
-                    "status": 2,
-                    "format": "audio/L16;rate=16000",
-                    "encoding": "raw",
-                },
+                "aue": "raw",          # 音频编码：raw
+                "auf": "audio/L16;rate=16000",  # 采样率
+                "voice_name": "xiaoyan",  # 无关紧要
+                "engine_type": "iat",   # 语音听写
+                "language": "zh_cn",
+                "accent": "mandarin",
+                "vad_eos": 3000,
             }
 
-            # 获取鉴权URL
-            url = self._get_xf_url()
-            # 发送请求
+            # 生成请求头鉴权信息
+            cur_time = str(int(time.time()))
+            param_base64 = base64.b64encode(json.dumps(params).encode()).decode()
+            # MD5(appid + cur_time + api_secret)
+            check_sum = hashlib.md5(
+                (self.xf_appid + cur_time + self.xf_api_secret).encode()
+            ).hexdigest()
+
+            headers = {
+                "X-Appid": self.xf_appid,
+                "X-CurTime": cur_time,
+                "X-Param": param_base64,
+                "X-CheckSum": check_sum,
+                "X-Real-Ip": "127.0.0.1",
+                "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+            }
+
+            # 请求体为原始音频数据
             resp = requests.post(
-                url.replace("ws://", "https://"),
-                json=params,
-                headers={"Content-Type": "application/json"},
+                self.xf_url,
+                data=audio_data,
+                headers=headers,
                 timeout=10,
             )
 
             if resp.status_code == 200:
                 result = resp.json()
-                if result.get("code") == 0:
+                if result.get("code") == "0":
                     # 拼接所有识别文本
                     texts = []
-                    for item in result.get("data", {}).get("result", []):
-                        ws = item.get("ws", [])
-                        for w in ws:
-                            cw = w.get("cw", [])
-                            for c in cw:
-                                texts.append(c.get("w", ""))
+                    # 数据结构：data.result[] -> ws[] -> cw[] -> w
+                    data_section = result.get("data", {})
+                    if data_section:
+                        result_list = data_section.get("result", [])
+                        for item in result_list:
+                            ws = item.get("ws", [])
+                            for w in ws:
+                                cw = w.get("cw", [])
+                                for c in cw:
+                                    texts.append(c.get("w", ""))
                     return "".join(texts)
                 else:
                     print(f"讯飞识别失败: {result}")
                     return ""
             else:
-                print(f"讯飞请求失败: {resp.status_code}")
+                print(f"讯飞请求失败: {resp.status_code} {resp.text}")
                 return ""
 
         except Exception as e:
