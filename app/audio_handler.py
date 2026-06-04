@@ -13,8 +13,6 @@ class AudioHandler:
         self.xf_appid = os.getenv("XF_APPID")
         self.xf_api_key = os.getenv("XF_API_KEY")
         self.xf_api_secret = os.getenv("XF_API_SECRET")
-
-        # 接口地址
         self.xf_url = "https://api.xfyun.cn/v1/service/v1/iat"
 
     async def get_voices(self):
@@ -50,21 +48,21 @@ class AudioHandler:
             with open(tmp_path, "rb") as f:
                 audio_data = f.read()
 
-            # 参数
+            # 参数（移除了无效的 voice_name）
             params = {
-                "aue": "raw",          # 音频编码：raw
-                "auf": "audio/L16;rate=16000",  # 采样率
-                "voice_name": "xiaoyan",  # 无关紧要
-                "engine_type": "iat",   # 语音听写
+                "engine_type": "iat",
+                "aue": "raw",
+                "auf": "audio/L16;rate=16000",
                 "language": "zh_cn",
                 "accent": "mandarin",
                 "vad_eos": 3000,
+                "result_level": "plain",
+                "punc": "0",
             }
 
-            # 生成请求头鉴权信息
+            # 生成鉴权信息
             cur_time = str(int(time.time()))
             param_base64 = base64.b64encode(json.dumps(params).encode()).decode()
-            # MD5(appid + cur_time + api_secret)
             check_sum = hashlib.md5(
                 (self.xf_appid + cur_time + self.xf_api_secret).encode()
             ).hexdigest()
@@ -78,7 +76,7 @@ class AudioHandler:
                 "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
             }
 
-            # 请求体为原始音频数据
+            # 发送请求
             resp = requests.post(
                 self.xf_url,
                 data=audio_data,
@@ -89,9 +87,7 @@ class AudioHandler:
             if resp.status_code == 200:
                 result = resp.json()
                 if result.get("code") == "0":
-                    # 拼接所有识别文本
                     texts = []
-                    # 数据结构：data.result[] -> ws[] -> cw[] -> w
                     data_section = result.get("data", {})
                     if data_section:
                         result_list = data_section.get("result", [])
@@ -106,7 +102,7 @@ class AudioHandler:
                     print(f"讯飞识别失败: {result}")
                     return ""
             else:
-                print(f"讯飞请求失败: {resp.status_code} {resp.text}")
+                print(f"讯飞请求失败: {resp.status_code}")
                 return ""
 
         except Exception as e:
