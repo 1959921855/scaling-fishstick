@@ -1,18 +1,22 @@
 import edge_tts
 import base64
 import hashlib
+import hmac
 import json
 import os
 import tempfile
 import time
-import requests
+import asyncio
+import websockets
+from datetime import datetime, timezone, timedelta
 
 class AudioHandler:
     def __init__(self):
         self.xf_appid = os.getenv("XF_APPID")
         self.xf_api_key = os.getenv("XF_API_KEY")
         self.xf_api_secret = os.getenv("XF_API_SECRET")
-        self.xf_url = "https://api.xfyun.cn/v1/service/v1/iat"
+        # 讯飞 WebSocket 地址
+        self.xf_url = "wss://iat-api.xfyun.cn/v2/iat"
 
     async def get_voices(self):
         voices = await edge_tts.list_voices(proxy=None)
@@ -32,77 +36,74 @@ class AudioHandler:
     def audio_to_base64(self, audio_bytes):
         return base64.b64encode(audio_bytes).decode('utf-8')
 
+    def _create_url(self):
+        """生成鉴权 URL"""
+        host = "iat-api.xfyun.cn"
+        path = "/v2/iat"
+        # 获取北京时间
+        tz = timezone(timedelta(hours=8))
+        date = datetime.now(tz).strftime("%a, %d %b %Y %H:%M:%S %Z")
+        signature_origin = f"host: {host}\ndate: {date}\nGET {path} HTTP/1.1"
+        signature = base64.b64encode(
+            hmac.new(self.xf_api_secret.encode(), signature_origin.encode(), hashlib.sha256).digest()
+        ).decode()
+        authorization_origin = f'api_key="{self.xf_api_key}", algorithm="hmac-sha256", headers="host date request-line", signature="{signature}"'
+        authorization = base64.b64encode(authorization_origin.encode()).decode()
+        return f"{self.xf_url}?authorization={authorization}&date={date}&host={host}"
+
+    async def _send_audio(self, audio_data: bytes):
+        """异步 WebSocket 识别"""
+        url = self._create_url()
+        async with websockets.connect(url) as websocket:
+            # 发送参数
+            frame = {
+                "common": {"app_id": self.xf_appid},
+                "business": {
+                    "language": "zh_cn",
+                    "domain": "iat",
+                    "accent": "mandarin",
+                    "vad_eos": 3000,
+                    "dwa": "wpgs"   # 开启动态修正
+                },
+                "data": {
+                    "status": 0,
+                    "format": "audio/L16;rate=16000",
+                    "encoding": "raw",
+                    "audio": base64.b64encode(audio_data).decode()
+                }
+            }
+            await websocket.send(json.dumps(frame))
+
+            # 发送结束标志
+            end_frame = {
+                "data": {"status": 2}
+            }
+            await websocket.send(json.dumps(end_frame))
+
+            # 接收结果
+            final_text = ""
+            async for msg in websocket:
+                result = json.loads(msg)
+                if result.get("code") != 0:
+                    print(f"讯飞识别出错: {result}")
+                    break
+                # 提取文本
+                if "data" in result and "result" in result["data"]:
+                    ws = result["data"]["result"].get("ws", [])
+                    for w in ws:
+                        cw = w.get("cw", [])
+                        for c in cw:
+                            final_text += c.get("w", "")
+                if result["data"].get("status") == 2:
+                    break
+            return final_text
+
     def speech_to_text(self, audio_bytes: bytes) -> str:
-        """使用讯飞语音听写 REST API 将音频转为文字"""
+        """同步调用 WebSocket 识别"""
         if not audio_bytes:
             return ""
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp.flush()
-            tmp_path = tmp.name
-
         try:
-            with open(tmp_path, "rb") as f:
-                audio_data = f.read()
-
-            # 只保留必要参数，去除 result_level 和 punc
-            params = {
-                "engine_type": "iat",
-                "aue": "raw",
-                "auf": "audio/L16;rate=16000",
-                "language": "zh_cn",
-                "accent": "mandarin",
-                "vad_eos": 3000,
-            }
-            # 确保 JSON 紧凑格式，无空格
-            param_json = json.dumps(params, separators=(',', ':'), ensure_ascii=False)
-            param_base64 = base64.b64encode(param_json.encode()).decode()
-
-            cur_time = str(int(time.time()))
-            check_sum = hashlib.md5(
-                (self.xf_appid + cur_time + self.xf_api_secret).encode()
-            ).hexdigest()
-
-            headers = {
-                "X-Appid": self.xf_appid,
-                "X-CurTime": cur_time,
-                "X-Param": param_base64,
-                "X-CheckSum": check_sum,
-                "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
-            }
-
-            resp = requests.post(
-                self.xf_url,
-                data=audio_data,
-                headers=headers,
-                timeout=10,
-            )
-
-            if resp.status_code == 200:
-                result = resp.json()
-                if result.get("code") == "0":
-                    texts = []
-                    data_section = result.get("data", {})
-                    if data_section:
-                        result_list = data_section.get("result", [])
-                        for item in result_list:
-                            ws = item.get("ws", [])
-                            for w in ws:
-                                cw = w.get("cw", [])
-                                for c in cw:
-                                    texts.append(c.get("w", ""))
-                    return "".join(texts)
-                else:
-                    print(f"讯飞识别失败: {result}")
-                    return ""
-            else:
-                print(f"讯飞请求失败: {resp.status_code}")
-                return ""
-
+            return asyncio.run(self._send_audio(audio_bytes))
         except Exception as e:
             print(f"讯飞识别异常: {e}")
             return ""
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
