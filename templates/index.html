@@ -241,6 +241,11 @@
                 font-size: 0.8rem;
                 padding: 4px 12px;
             }
+            /* 确保音色选择在手机端可见 */
+            .voice-selector {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
         }
     </style>
 </head>
@@ -268,7 +273,7 @@
                 <input type="text" id="textInput" placeholder="输入文字..." autocomplete="off">
                 <button class="send-btn" id="sendTextBtn">发送</button>
             </div>
-            <button class="voice-btn" id="voiceBtn">🎤 按住 说话</button>
+            <button class="voice-btn" id="voiceBtn">🎤 点击说话</button>
             <button class="call-btn" id="callBtn">📞 语音通话</button>
             <div class="voice-selector">
                 <span>语音音色：</span>
