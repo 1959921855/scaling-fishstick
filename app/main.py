@@ -643,6 +643,13 @@ async def voice_chat(audio: UploadFile = File(...), user_id: str = Form("default
 @app.get("/web", response_class=HTMLResponse)
 async def web_chat(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+@app.post("/speech-to-text")
+async def speech_to_text_api(audio: UploadFile = File(...)):
+    audio_bytes = await audio.read()
+    text = audio_handler.speech_to_text(audio_bytes)
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "无法识别语音"})
+    return {"text": text}
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
