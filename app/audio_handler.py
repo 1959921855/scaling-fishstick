@@ -9,7 +9,6 @@ import requests
 
 class AudioHandler:
     def __init__(self):
-        # 讯飞配置
         self.xf_appid = os.getenv("XF_APPID")
         self.xf_api_key = os.getenv("XF_API_KEY")
         self.xf_api_secret = os.getenv("XF_API_SECRET")
@@ -38,7 +37,6 @@ class AudioHandler:
         if not audio_bytes:
             return ""
 
-        # 将音频写入临时文件
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp.write(audio_bytes)
             tmp.flush()
@@ -48,7 +46,7 @@ class AudioHandler:
             with open(tmp_path, "rb") as f:
                 audio_data = f.read()
 
-            # 参数（移除了无效的 voice_name）
+            # 只保留必要参数，去除 result_level 和 punc
             params = {
                 "engine_type": "iat",
                 "aue": "raw",
@@ -56,13 +54,12 @@ class AudioHandler:
                 "language": "zh_cn",
                 "accent": "mandarin",
                 "vad_eos": 3000,
-                "result_level": "plain",
-                "punc": "0",
             }
+            # 确保 JSON 紧凑格式，无空格
+            param_json = json.dumps(params, separators=(',', ':'), ensure_ascii=False)
+            param_base64 = base64.b64encode(param_json.encode()).decode()
 
-            # 生成鉴权信息
             cur_time = str(int(time.time()))
-            param_base64 = base64.b64encode(json.dumps(params).encode()).decode()
             check_sum = hashlib.md5(
                 (self.xf_appid + cur_time + self.xf_api_secret).encode()
             ).hexdigest()
@@ -72,11 +69,9 @@ class AudioHandler:
                 "X-CurTime": cur_time,
                 "X-Param": param_base64,
                 "X-CheckSum": check_sum,
-                "X-Real-Ip": "127.0.0.1",
                 "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
             }
 
-            # 发送请求
             resp = requests.post(
                 self.xf_url,
                 data=audio_data,
