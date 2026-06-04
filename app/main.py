@@ -640,13 +640,10 @@ async def voice_chat(audio: UploadFile = File(...), user_id: str = Form("default
     b64 = audio_handler.audio_to_base64(audio_out) if audio_out else ""
     return {"recognized_text": user_text, "ai_response": chat_res.response, "audio_base64": b64, "session_id": chat_res.session_id}
 
-@app.get("/web", response_class=HTMLResponse)
-async def web_chat(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
 @app.post("/speech-to-text")
 async def speech_to_text_api(audio: UploadFile = File(...)):
     audio_bytes = await audio.read()
-    text = audio_handler.speech_to_text(audio_bytes)
+    text = await audio_handler.speech_to_text(audio_bytes)
     if not text:
         return JSONResponse(status_code=400, content={"error": "无法识别语音"})
     return {"text": text}
