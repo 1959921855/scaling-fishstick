@@ -56,7 +56,7 @@ class NewSessionRequest(BaseModel):
     user_id: str = "default_user"
     title: Optional[str] = "新对话"
 
-# ==================== 模型服务（带重试，错误返回前端） ====================
+# ==================== 模型服务（带重试） ====================
 class ModelService:
     def __init__(self):
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -78,8 +78,8 @@ class ModelService:
                 response = self.client.chat.completions.create(
                     model="deepseek-chat",
                     messages=messages,
-                    temperature=0.7,
-                    max_tokens=500,
+                    temperature=0.5,          # 更确定，回复更短
+                    max_tokens=200,           # 限制输出长度
                     tools=tools,
                     tool_choice=tool_choice
                 )
@@ -91,7 +91,6 @@ class ModelService:
                 if attempt == 0:
                     import time
                     time.sleep(1)
-        # 将错误详情返回给前端
         error_detail = f"{type(last_exception).__name__}: {str(last_exception)}" if last_exception else "未知错误"
         logger.error(f"🚨 DeepSeek 全部重试失败: {error_detail}")
         class Dummy:
@@ -231,7 +230,6 @@ async def get_weather_tool(city: str, date_type: str = "today") -> str:
         return await http_client.get(url, params=params)
 
     try:
-        # 地理编码（重试）
         geo_resp = None
         for attempt in range(2):
             try:
@@ -252,7 +250,6 @@ async def get_weather_tool(city: str, date_type: str = "today") -> str:
         adcode = geocode["adcode"]
         location_name = geocode.get("formatted_address", city)
 
-        # 天气查询（重试）
         ext = "base" if date_type == "today" else "all"
         weather_resp = None
         for attempt in range(2):
@@ -287,7 +284,7 @@ async def get_weather_tool(city: str, date_type: str = "today") -> str:
         logger.error(f"❌ 天气异常: {e}")
         return "天气服务暂时不可用。"
 
-# ==================== 股票（已有重试） ====================
+# ==================== 股票（保持不变） ====================
 NAME_TO_CODE = {
     "工商银行": "sh601398", "建设银行": "sh601939", "农业银行": "sh601288",
     "中国银行": "sh601988", "招商银行": "sh600036", "交通银行": "sh601328",
@@ -425,7 +422,7 @@ def get_current_time() -> str:
     if h12==0: h12=12
     return f"现在是{now.year}年{now.month}月{now.day}日 {ap}{h12}点{now.minute:02d}分，{weekdays[now.weekday()]}"
 
-# ==================== 工具分发（带日志） ====================
+# ==================== 工具分发 ====================
 async def execute_tool(tool_name: str, arguments: dict) -> str:
     logger.info(f"🛠️ 执行工具: {tool_name}, 参数: {arguments}")
     try:
@@ -441,7 +438,7 @@ async def execute_tool(tool_name: str, arguments: dict) -> str:
             lines = [f"🔍 搜索“{query}”结果："]
             for i, (t, b, l) in enumerate(results[:5], 1):
                 lines.append(f"{i}. {t}")
-                lines.append(f"   {b[:120]}...")
+                lines.append(f"   {b[:80]}...")          # 缩短摘要
             return "\n".join(lines)
         elif tool_name == "search_news":
             query = arguments.get("query", "")
@@ -451,7 +448,7 @@ async def execute_tool(tool_name: str, arguments: dict) -> str:
             lines = [f"📰 关于“{query}”的新闻："]
             for i, (t, b, l) in enumerate(results[:6], 1):
                 lines.append(f"{i}. {t}")
-                cb = re.sub(r'[\\*]', '', b)[:120].strip()
+                cb = re.sub(r'[\\*]', '', b)[:80].strip()   # 缩短摘要
                 if cb: lines.append(f"   {cb}")
             return "\n".join(lines)
         elif tool_name == "get_stock":
@@ -463,13 +460,11 @@ async def execute_tool(tool_name: str, arguments: dict) -> str:
         logger.error(f"❌ 工具执行异常: {e}")
         return "服务暂时不可用，请稍后重试"
 
-# ==================== 系统提示词 ====================
+# ==================== 系统提示词（精简） ====================
 SYSTEM_PROMPT = (
-    "你是小暖，一个亲切、耐心的老年人语音陪伴助手。"
-    "请用简单易懂的口语和老人交流，使用“您”，回复尽量简短（2-3句话），方便语音播放。"
-    "当需要实时信息（天气、新闻、股价、时间等）时，请调用提供的工具函数，并根据返回结果生成自然回答。"
-    "如果用户没有指明城市，天气默认查询南京。"
-    "不要使用任何 Markdown 符号。"
+    "你是小暖，老年人陪伴助手。回答简短自然。"
+    "实时信息必须调用工具。禁止编造实时数据。"
+    "未指明城市时天气默认查询南京。"
 )
 
 # ==================== 应用生命周期 ====================
@@ -487,10 +482,9 @@ async def lifespan(app: FastAPI):
     await database.disconnect()
     logger.info("🛑 服务关闭")
 
-app = FastAPI(title="小暖智能体", version="24.0", lifespan=lifespan)
+app = FastAPI(title="小暖智能体", version="24.1", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# ---------- 修改模板路径，使用绝对路径 ----------
 templates_dir = os.path.join(os.path.dirname(__file__), "..", "templates")
 templates = Jinja2Templates(directory=templates_dir)
 
@@ -528,7 +522,7 @@ async def delete_message_api(message_id: int, user_id: str = "default_user"):
 async def get_voices():
     return {"voices": await audio_handler.get_voices()}
 
-# ==================== 核心对话（错误详情返回前端） ====================
+# ==================== 核心对话 ====================
 @app.post("/chat/text", response_model=ChatResponse)
 async def text_chat(request: ChatRequest):
     user_id = request.user_id
@@ -554,7 +548,8 @@ async def text_chat(request: ChatRequest):
     if session_id is None:
         session_id = await create_session(user_id, "新对话")
 
-    history = await get_session_messages(session_id, limit=6)
+    # 历史消息从6条缩减为4条
+    history = await get_session_messages(session_id, limit=4)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
