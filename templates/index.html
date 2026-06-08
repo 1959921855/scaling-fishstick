@@ -2,286 +2,244 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>语音陪聊 · 小暖</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>小暖 · 温暖陪伴</title>
     <style>
-        * { box-sizing: border-box; }
+        :root {
+            --primary: #e07b6e;
+            --primary-light: #f7c5bc;
+            --primary-soft: #fef2ef;
+            --primary-glow: rgba(224,123,110,0.25);
+            --bg: #fdf8f5;
+            --bg-warm: #f9f3ef;
+            --surface: #ffffff;
+            --text: #4a3f3b;
+            --text-secondary: #8c7f7a;
+            --border: #f0e5de;
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.02), 0 1px 3px rgba(0,0,0,0.03);
+            --shadow-md: 0 8px 24px rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.02);
+            --shadow-lg: 0 16px 32px rgba(0,0,0,0.06);
+            --radius-sm: 10px;
+            --radius-md: 18px;
+            --radius-lg: 26px;
+            --transition: 0.25s cubic-bezier(0.2,0,0,1);
+            --font: 'Inter', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(145deg, #1e2b3c 0%, #0f1a24 100%);
-            min-height: 100vh;
-            margin: 0;
-            padding: 16px;
+            font-family: var(--font);
+            background: var(--bg);
+            height: 100vh;
             display: flex;
-            justify-content: center;
-            align-items: center;
+            color: var(--text);
+            -webkit-tap-highlight-color: transparent;
         }
-        .app-container {
-            display: flex;
-            width: 100%;
-            max-width: 1400px;
-            height: 90vh;
-            background: rgba(255,255,255,0.1);
-            backdrop-filter: blur(8px);
-            border-radius: 32px;
-            overflow: hidden;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
-            position: relative;
-        }
-        .sessions-sidebar {
-            width: 300px;
-            background: rgba(30, 43, 60, 0.85);
-            border-right: 1px solid rgba(255,255,255,0.2);
+        .sidebar {
+            width: 280px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            overflow: hidden;
-            transition: 0.3s;
+            transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+            z-index: 50;
+            box-shadow: var(--shadow-md);
+            flex-shrink: 0;
         }
-        .sessions-header {
-            padding: 16px 12px;
-            background: #2c3e4e;
-            color: white;
-            font-weight: bold;
-            font-size: 1.1rem;
+        .sidebar.hidden { transform: translateX(-100%); }
+        .sidebar-header {
+            padding: 24px 20px 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 8px;
-            flex-wrap: nowrap;
-            white-space: nowrap;
+            border-bottom: 1px solid var(--border);
         }
-        .sessions-header span { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
+        .sidebar-header h2 { font-size: 1.3rem; font-weight: 600; color: var(--text); }
         .new-session-btn {
-            background: #3b6eff;
-            border: none;
-            border-radius: 20px;
-            padding: 6px 12px;
+            background: var(--primary);
             color: white;
+            padding: 8px 16px;
+            border-radius: 24px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: none;
             cursor: pointer;
-            font-size: 0.8rem;
-            flex-shrink: 0;
-            white-space: nowrap;
+            box-shadow: 0 4px 10px var(--primary-glow);
         }
-        .sessions-list {
-            flex: 1;
-            overflow-y: auto;
-            padding: 12px;
-        }
+        .session-list { flex: 1; overflow-y: auto; padding: 12px; }
         .session-item {
-            background: rgba(255,255,255,0.1);
-            border-radius: 12px;
-            padding: 12px;
-            margin-bottom: 12px;
+            padding: 14px 16px;
+            border-radius: 14px;
+            margin-bottom: 6px;
             cursor: pointer;
-            transition: 0.2s;
-            color: #e2e8f0;
-            position: relative;
+            transition: var(--transition);
+            background: transparent;
+            border: 1px solid transparent;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        .session-item:hover { background: rgba(59,110,255,0.4); }
-        .session-item.active { background: #3b6eff; color: white; }
-        .session-title { font-weight: bold; margin-bottom: 4px; font-size: 0.95rem; word-break: break-word; padding-right: 32px; }
-        .session-preview { font-size: 0.75rem; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .session-time { font-size: 0.7rem; color: #94a3b8; margin-top: 4px; }
-        .delete-session {
-            position: absolute; right: 10px; top: 10px;
-            background: rgba(255,255,255,0.2); border: none; border-radius: 50%;
-            width: 24px; height: 24px; color: #ff7b5c; cursor: pointer; font-size: 14px;
+        .session-item:hover { background: var(--primary-soft); }
+        .session-item.active { background: var(--primary-soft); border-color: var(--primary-light); }
+        .session-info { flex: 1; overflow: hidden; }
+        .session-title { font-weight: 600; font-size: 0.95rem; }
+        .session-preview { font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .session-time { font-size: 0.7rem; color: #bfb3aa; }
+        .delete-session-btn {
+            background: none; border: none; color: #ccc; font-size: 1.2rem;
+            cursor: pointer; padding: 4px 8px; border-radius: 8px; opacity: 0.6;
+        }
+        .delete-session-btn:hover { background: #fee9e5; color: #c45a4e; }
+        .main { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--bg); }
+        .chat-header {
+            padding: 12px 20px;
+            background: rgba(255,255,255,0.8);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between; z-index: 10;
+        }
+        .menu-btn {
+            font-size: 1.4rem; display: none; width: 40px; height: 40px;
+            align-items: center; justify-content: center; border-radius: 12px;
+            background: var(--surface); box-shadow: var(--shadow-sm); border: none; cursor: pointer;
+        }
+        .header-title { font-weight: 600; font-size: 1.1rem; }
+        .header-right { display: flex; align-items: center; gap: 8px; }
+        .interrupt-btn {
+            background: #fff6f5; border: 1px solid #ffdbd9; border-radius: 24px;
+            padding: 6px 14px; font-size: 0.85rem; font-weight: 500; color: #c45a4e;
+            cursor: pointer; display: none; align-items: center; gap: 4px;
+        }
+        .call-mode-btn {
+            background: #f5f1ed; border-radius: 24px; padding: 6px 14px;
+            font-size: 0.85rem; font-weight: 500; color: var(--text); border: none; cursor: pointer;
+        }
+        .call-mode-btn.active { background: #fee9e5; color: #c45a4e; }
+        .voice-select {
+            padding: 6px 14px; border-radius: 24px; border: 1px solid var(--border);
+            background: var(--surface); font-size: 0.85rem; color: var(--text); outline: none;
         }
         .chat-area {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: rgba(248,250,255,0.95);
+            flex: 1; overflow-y: auto; padding: 24px 20px; scroll-behavior: smooth;
+            display: flex; flex-direction: column; gap: 18px;
+            background: linear-gradient(180deg, var(--bg) 0%, var(--bg-warm) 100%);
         }
-        .chat-header {
-            background: #2c3e4e;
-            color: white;
-            padding: 14px 20px;
-            font-size: 1.3rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: relative;
+        .message { display: flex; flex-direction: column; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .message.user { align-items: flex-end; }
+        .message.assistant { align-items: flex-start; }
+        .message-content {
+            max-width: 82%; padding: 14px 18px; border-radius: var(--radius-md);
+            font-size: 0.95rem; line-height: 1.55; word-break: break-word;
+            box-shadow: var(--shadow-sm);
         }
-        #menuBtn { display: none; }
-        .interrupt-header-btn {
-            background: #ff9800;
-            color: white;
-            border: none;
-            border-radius: 30px;
-            padding: 6px 16px;
-            font-weight: bold;
-            cursor: pointer;
-            font-size: 0.9rem;
-            margin-left: auto;
+        .user .message-content { background: var(--primary); color: white; border-bottom-right-radius: 8px; }
+        .assistant .message-content { background: var(--surface); color: var(--text); border-bottom-left-radius: 8px; }
+        .input-container {
+            position: sticky; bottom: 0; left: 0; right: 0;
+            padding: 12px 16px 16px;
+            background: linear-gradient(to top, var(--bg) 80%, transparent);
             z-index: 10;
         }
-        .interrupt-header-btn:hover {
-            background: #e68900;
+        .input-card {
+            background: var(--surface); border-radius: 28px; padding: 6px 10px;
+            display: flex; align-items: center; gap: 8px;
+            box-shadow: 0 12px 28px rgba(0,0,0,0.05); border: 1px solid var(--border);
+            position: relative;
         }
-        .messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
+        .input-box {
+            flex: 1; border: none; outline: none; font-size: 0.95rem;
+            padding: 10px 4px; background: transparent; color: var(--text);
         }
-        .message {
-            max-width: 80%;
-            padding: 10px 16px;
-            border-radius: 24px;
-            line-height: 1.45;
-            word-break: break-word;
+        .voice-btn, .plus-btn, .send-btn {
+            height: 42px; display: flex; align-items: center; justify-content: center;
+            font-size: 1rem; flex-shrink: 0; border: none; cursor: pointer; font-weight: 500;
         }
-        .message.user {
-            align-self: flex-end;
-            background: #3b6eff;
-            color: white;
-            border-bottom-right-radius: 4px;
+        .voice-btn {
+            width: 42px; border-radius: 50%; background: #fdefec; color: var(--primary); font-size: 1.15rem;
         }
-        .message.ai {
-            align-self: flex-start;
-            background: white;
-            color: #1f2a3e;
-            border-bottom-left-radius: 4px;
-            border: 1px solid #e2e8f0;
+        .voice-btn.recording { background: #ffe0db; color: #c44a42; animation: pulse 1s infinite; }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(224,123,110,0.5); }
+            70% { box-shadow: 0 0 0 10px rgba(224,123,110,0); }
+            100% { box-shadow: 0 0 0 0 rgba(224,123,110,0); }
         }
-        .input-area {
-            background: white;
-            padding: 16px 20px 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
+        .plus-btn {
+            width: 42px; border-radius: 50%; background: #f6f1ed; color: var(--text-secondary); font-size: 1.25rem;
         }
-        .text-input-row {
-            display: flex;
-            gap: 12px;
+        .send-btn {
+            padding: 0 22px; border-radius: 24px; background: var(--primary); color: white;
+            box-shadow: 0 4px 14px var(--primary-glow); font-size: 0.95rem;
         }
-        #textInput {
-            flex: 1;
-            padding: 12px;
-            border: 1px solid #cbd5e1;
-            border-radius: 32px;
-            outline: none;
+        .plus-menu {
+            position: absolute; bottom: 72px; right: 10px; background: var(--surface);
+            border-radius: 20px; box-shadow: var(--shadow-lg); border: 1px solid var(--border);
+            padding: 8px; display: none; flex-direction: column; gap: 4px; z-index: 20;
         }
-        .send-btn, .voice-btn, .call-btn {
-            border: none;
-            border-radius: 40px;
-            padding: 12px 20px;
-            font-weight: bold;
-            cursor: pointer;
+        .plus-menu.visible { display: flex; }
+        .menu-item {
+            display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+            border-radius: 14px; font-size: 0.95rem; color: var(--text); cursor: pointer;
+            background: transparent; border: none; width: 100%; text-align: left;
         }
-        .send-btn { background: #3b6eff; color: white; }
-        .voice-btn { background: #ff7b5c; color: white; width: 80%; margin: 0 auto; }
-        .call-btn {
-            background: #4caf50;
-            color: white;
-            width: 80%;
-            margin: 8px auto 0;
+        .menu-item:hover { background: #fdf4f1; }
+        .image-preview-container {
+            display: none; align-items: center; gap: 10px; margin: 0 0 8px 12px;
+            background: var(--surface); padding: 6px 14px; border-radius: 20px; width: fit-content;
         }
-        .call-btn.active {
-            background: #f44336;
-        }
-        .voice-selector {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            font-size: 0.8rem;
-            color: #2c3e4e;
-            margin-top: 6px;
-        }
-        .voice-selector select {
-            padding: 6px 10px;
-            border-radius: 20px;
-            border: 1px solid #ccc;
-            background: #f9f9f9;
-        }
-        .status {
-            font-size: 0.75rem;
-            text-align: center;
-            color: #2c3e4e;
-        }
-        button:disabled { opacity: 0.5; }
-
-        @media (max-width:768px) {
-            body { padding: 0; }
-            .app-container { width: 100vw; height: 100vh; border-radius: 0; }
-            .sessions-sidebar {
-                position: absolute;
-                left: -85%;
-                top: 0;
-                width: 80%;
-                max-width: 320px;
-                height: 100%;
-                z-index: 999;
-                background: #223243;
-                box-shadow: 4px 0 20px rgba(0,0,0,0.35);
-            }
-            .sessions-sidebar.show { left: 0; }
-            .chat-area { width: 100%; }
-            #menuBtn {
-                display: block;
-                background: rgba(255,255,255,0.15);
-                border: none;
-                color: white;
-                width: 42px;
-                height: 42px;
-                border-radius: 12px;
-                font-size: 1.2rem;
-                margin-right: 10px;
-                cursor: pointer;
-            }
-            .chat-header { font-size: 1rem; }
-            .message { max-width: 92%; font-size: 0.95rem; }
-            .voice-btn, .call-btn { width: 100%; }
-            .input-area { padding-bottom: 28px; }
-            .interrupt-header-btn {
-                font-size: 0.8rem;
-                padding: 4px 12px;
-            }
-            /* 确保音色选择在手机端可见 */
-            .voice-selector {
-                flex-wrap: wrap;
-                justify-content: center;
-            }
+        .image-preview { width: 42px; height: 42px; border-radius: 12px; object-fit: cover; border: 1px solid var(--border); }
+        .remove-image-btn { font-size: 0.8rem; color: #c45a4e; cursor: pointer; font-weight: 500; }
+        @media (max-width: 768px) {
+            .sidebar { position: fixed; left: 0; top: 0; height: 100vh; transform: translateX(-100%); }
+            .sidebar.visible { transform: translateX(0); }
+            .menu-btn { display: flex; }
+            .message-content { max-width: 88%; }
+            .chat-area { padding: 16px 12px; }
         }
     </style>
 </head>
 <body>
 
-<div class="app-container">
-    <div class="sessions-sidebar">
-        <div class="sessions-header">
-            <span>💬 历史对话</span>
-            <button class="new-session-btn" id="newSessionBtn">+ 新对话</button>
-        </div>
-        <div class="sessions-list" id="sessionsList">加载中...</div>
+<div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+        <h2>✨ 小暖</h2>
+        <button class="new-session-btn" onclick="createNewSession()">＋ 新对话</button>
     </div>
-    <div class="chat-area">
-        <div class="chat-header">
-            <button id="menuBtn">☰</button>
-            <span>🎙️ 智能语音陪聊 · 小暖</span>
-            <button id="interruptHeaderBtn" class="interrupt-header-btn">⏹️ 打断</button>
-        </div>
-        <div class="messages" id="messageBox">
-            <div class="message ai">加载会话中...</div>
-        </div>
-        <div class="input-area">
-            <div class="text-input-row">
-                <input type="text" id="textInput" placeholder="输入文字..." autocomplete="off">
-                <button class="send-btn" id="sendTextBtn">发送</button>
-            </div>
-            <button class="voice-btn" id="voiceBtn">🎤 点击说话</button>
-            <button class="call-btn" id="callBtn">📞 语音通话</button>
-            <div class="voice-selector">
-                <span>语音音色：</span>
-                <select id="voiceSelect"></select>
-            </div>
-            <div class="status" id="statusMsg">✅ 在线 | 支持打断</div>
+    <div class="session-list" id="sessionList"></div>
+</div>
+
+<div class="main">
+    <div class="chat-header">
+        <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+        <div class="header-title">🧣 小暖 · 温暖陪伴</div>
+        <div class="header-right">
+            <button class="interrupt-btn" id="interruptBtn" onclick="handleInterrupt()">🔇 打断</button>
+            <button class="call-mode-btn" id="callBtn" onclick="toggleCallMode()">📞 通话</button>
+            <select class="voice-select" id="voiceSelect" onchange="changeVoice()"></select>
         </div>
     </div>
+
+    <div class="chat-area" id="chatArea"></div>
+
+    <div class="input-container">
+        <div class="image-preview-container" id="imagePreviewContainer">
+            <img class="image-preview" id="imagePreview" src="" alt="预览">
+            <span class="remove-image-btn" onclick="removeImage()">✕ 移除</span>
+        </div>
+        <div class="input-card">
+            <button class="voice-btn" id="voiceBtn" onclick="handleVoiceClick()">🎤</button>
+            <input type="text" class="input-box" id="userInput" placeholder="和我说点什么吧…" onkeydown="handleKey(event)" autofocus>
+            <button class="plus-btn" onclick="togglePlusMenu()">＋</button>
+            <button class="send-btn" onclick="sendMessageText()">发送</button>
+            <div class="plus-menu" id="plusMenu">
+                <button class="menu-item" onclick="handleVoiceClick()"><span>🎤</span> 语音输入</button>
+                <button class="menu-item" onclick="toggleCallMode()"><span>📞</span> 语音通话</button>
+                <button class="menu-item" onclick="document.getElementById('imageInput').click()"><span>📷</span> 拍照</button>
+                <button class="menu-item" onclick="document.getElementById('imageInput').click()"><span>🖼️</span> 相册</button>
+            </div>
+        </div>
+    </div>
+    <input type="file" id="imageInput" accept="image/*" capture="environment" style="display:none" onchange="handleImageSelect(event)">
 </div>
 
 <script>
@@ -290,122 +248,343 @@
     let currentSessionId = null;
     let currentAudio = null;
     let currentVoice = localStorage.getItem('preferred_voice') || 'zh-CN-XiaoxiaoNeural';
-
     let isCallMode = false;
     let waitingForReply = false;
     let callLoopActive = false;
 
-    const messageBox = document.getElementById('messageBox');
-    const textInput = document.getElementById('textInput');
-    const sendBtn = document.getElementById('sendTextBtn');
+    let selectedImageBase64 = null;
+    let greetingTimeout = null;
+    let greetingSent = true;
+
+    const messageBox = document.getElementById('chatArea');
+    const textInput = document.getElementById('userInput');
     const voiceBtn = document.getElementById('voiceBtn');
     const callBtn = document.getElementById('callBtn');
-    const interruptHeaderBtn = document.getElementById('interruptHeaderBtn');
-    const statusSpan = document.getElementById('statusMsg');
-    const sessionsListDiv = document.getElementById('sessionsList');
-    const newSessionBtn = document.getElementById('newSessionBtn');
+    const interruptBtn = document.getElementById('interruptBtn');
+    const sessionsListDiv = document.getElementById('sessionList');
     const voiceSelect = document.getElementById('voiceSelect');
 
-    const menuBtn = document.getElementById('menuBtn');
-    const sidebar = document.querySelector('.sessions-sidebar');
-    if (menuBtn) {
-        menuBtn.addEventListener('click', () => sidebar.classList.toggle('show'));
-    }
-    document.addEventListener('click', (e) => {
-        if (window.innerWidth <= 768 && sidebar.classList.contains('show')) {
-            if (!sidebar.contains(e.target) && !menuBtn.contains(e.target)) {
-                sidebar.classList.remove('show');
+    // VAD 变量（区分打断检测与静音检测）
+    let vadStream = null;
+    let vadAudioContext = null;
+    let vadAnalyser = null;
+    let vadRunning = false;
+    let vadStartDelayActive = false;
+    const VAD_THRESHOLD = 40;                // 音量阈值
+    const VAD_INTERRUPT_FRAMES = 5;          // 连续有声帧数 -> 打断
+    const VAD_SILENCE_FRAMES = 10;           // 连续静音帧数 -> 识别结束
+    let vadOverCount = 0;
+    let vadSilenceCount = 0;
+
+    window.toggleSidebar = () => document.getElementById('sidebar').classList.toggle('visible');
+
+    // 音色加载
+    async function loadVoices() {
+        try {
+            const res = await fetch('/voices');
+            const data = await res.json();
+            voiceSelect.innerHTML = '';
+            for (const v of data.voices) {
+                const option = document.createElement('option');
+                option.value = v.name;
+                option.textContent = v.display;
+                if (v.name === currentVoice) option.selected = true;
+                voiceSelect.appendChild(option);
             }
+        } catch(e) { console.error('加载音色失败', e); }
+    }
+    window.changeVoice = () => {
+        currentVoice = voiceSelect.value;
+        localStorage.setItem('preferred_voice', currentVoice);
+    };
+
+    // 会话管理
+    async function loadSessions() {
+        try {
+            const res = await fetch(`/sessions/${USER_ID}?limit=50`);
+            const data = await res.json();
+            const sessions = data.sessions || [];
+            if (!sessions.length) {
+                sessionsListDiv.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;">暂无对话</div>';
+                return;
+            }
+            let html = '';
+            for (const sess of sessions) {
+                const date = new Date(sess.updated_at).toLocaleDateString('zh-CN');
+                const time = new Date(sess.updated_at).toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' });
+                html += `<div class="session-item ${currentSessionId===sess.id?'active':''}">
+                    <div class="session-info" style="flex:1;overflow:hidden;">
+                        <div class="session-title">${escapeHtml(sess.title)}</div>
+                        <div class="session-preview">${escapeHtml(sess.preview||'')}</div>
+                        <div class="session-time">${date} ${time}</div>
+                    </div>
+                    <button class="delete-session-btn" data-sid="${sess.id}">🗑️</button>
+                </div>`;
+            }
+            sessionsListDiv.innerHTML = html;
+
+            sessionsListDiv.querySelectorAll('.session-item').forEach(item => {
+                item.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('delete-session-btn')) return;
+                    const sid = parseInt(item.querySelector('.delete-session-btn').getAttribute('data-sid'));
+                    if (sid) {
+                        openSession(sid);
+                        if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('visible');
+                    }
+                });
+            });
+
+            sessionsListDiv.querySelectorAll('.delete-session-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const sid = parseInt(btn.getAttribute('data-sid'));
+                    if (confirm('确定删除此会话吗？')) {
+                        await fetch(`/session/${sid}?user_id=${USER_ID}`, { method:'DELETE' });
+                        if (currentSessionId === sid) {
+                            currentSessionId = null;
+                            await createNewSession();
+                        } else await loadSessions();
+                    }
+                });
+            });
+        } catch(e) { console.error(e); }
+    }
+
+    async function openSession(sid) {
+        currentSessionId = sid;
+        messageBox.innerHTML = '';
+        try {
+            const res = await fetch(`/session/${sid}/messages`);
+            const data = await res.json();
+            const messages = data.messages || [];
+            for (const msg of messages) addMessage(msg.role, msg.content, false);
+            await loadSessions();
+            scrollToBottom();
+        } catch(e) { console.error(e); }
+    }
+
+    async function createNewSession() {
+        try {
+            const res = await fetch('/session/new', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ user_id:USER_ID, title:'新对话' })
+            });
+            const data = await res.json();
+            currentSessionId = data.session_id;
+            messageBox.innerHTML = '';
+            greetingSent = false;
+            const greeting = '你好呀，我是小暖，有什么可以陪您聊的？';
+            addMessage('assistant', greeting);
+            await speakText(greeting);
+            await loadSessions();
+            scrollToBottom();
+        } catch(e) { console.error(e); }
+    }
+    window.createNewSession = createNewSession;
+
+    function addMessage(role, text, speak = true) {
+        const wrapper = document.createElement('div');
+        wrapper.className = `message ${role}`;
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
+        contentDiv.textContent = text;
+        wrapper.appendChild(contentDiv);
+        messageBox.appendChild(wrapper);
+        scrollToBottom();
+    }
+
+    function scrollToBottom() { messageBox.scrollTop = messageBox.scrollHeight; }
+
+    // VAD 开始（仅在AI播放语音时调用，用于打断）
+    async function startVAD() {
+        if (vadRunning) return;
+        try {
+            vadStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+            vadAudioContext = new AudioContext();
+            const source = vadAudioContext.createMediaStreamSource(vadStream);
+            vadAnalyser = vadAudioContext.createAnalyser();
+            vadAnalyser.fftSize = 256;
+            source.connect(vadAnalyser);
+
+            vadRunning = true;
+            vadOverCount = 0;
+            vadSilenceCount = 0;
+            vadStartDelayActive = true;
+            setTimeout(() => { vadStartDelayActive = false; }, 300); // 启动延迟，避免尾音
+
+            const dataArray = new Uint8Array(vadAnalyser.frequencyBinCount);
+
+            const checkVolume = () => {
+                if (!vadRunning) return;
+                if (vadStartDelayActive) {
+                    requestAnimationFrame(checkVolume);
+                    return;
+                }
+                vadAnalyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                const avg = sum / dataArray.length;
+                if (avg > VAD_THRESHOLD) {
+                    vadOverCount++;
+                    vadSilenceCount = 0;
+                    if (vadOverCount >= VAD_INTERRUPT_FRAMES) {
+                        stopVAD();
+                        handleInterrupt(); // 触发打断
+                        return;
+                    }
+                } else {
+                    vadOverCount = 0;
+                    vadSilenceCount++;
+                    // 静音达到足够帧数时，不做打断，继续检测（让用户继续说话）
+                    // 但这里不主动触发识别结束，识别结束由STT自己控制
+                }
+                requestAnimationFrame(checkVolume);
+            };
+            requestAnimationFrame(checkVolume);
+        } catch (e) {
+            console.error('VAD 启动失败:', e);
+            vadRunning = false;
         }
-    });
-
-    let idleTimer = null;
-    let lastGreetingTime = 0;
-    const IDLE_SECONDS = 20;
-    const GREETING_COOLDOWN = 60 * 1000;
-
-    function resetIdleTimer() {
-        if (isCallMode) return;
-        if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => {
-            if (!isCallMode) triggerGreeting();
-        }, IDLE_SECONDS * 1000);
     }
 
-    async function triggerGreeting() {
-        if (isCallMode) return;
-        if (currentAudio || sendBtn.disabled) return;
-        const now = Date.now();
-        if (now - lastGreetingTime < GREETING_COOLDOWN) return;
-        lastGreetingTime = now;
-        const greeting = "你好呀，我在这里，有什么想聊的吗？";
-        addAIMessage(greeting);
-        await playTTS(greeting, currentVoice);
+    function stopVAD() {
+        if (vadStream) {
+            vadStream.getTracks().forEach(track => track.stop());
+            vadStream = null;
+        }
+        if (vadAudioContext) {
+            vadAudioContext.close();
+            vadAudioContext = null;
+        }
+        vadAnalyser = null;
+        vadRunning = false;
+        vadOverCount = 0;
+        vadSilenceCount = 0;
     }
 
-    function onUserActivity() {
-        resetIdleTimer();
-    }
-
-    function escapeHtml(str) {
-        return str.replace(/[&<>]/g, (m) => (m === '&' ? '&amp;' : (m === '<' ? '&lt;' : '&gt;')));
-    }
-
-    function addAIMessage(text) {
-        const div = document.createElement('div');
-        div.className = 'message ai';
-        div.innerHTML = `🤖 ${escapeHtml(text)}`;
-        messageBox.appendChild(div);
-        messageBox.scrollTop = messageBox.scrollHeight;
-    }
-
-    async function playTTS(text, voice) {
+    // TTS 播放
+    async function speakText(text, voice = currentVoice) {
         if (!text) return;
         try {
             const res = await fetch('/chat/text-to-speech', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text, voice })
             });
             const data = await res.json();
             if (data.audio_response) {
-                if (currentAudio) {
-                    currentAudio.pause();
-                    currentAudio.currentTime = 0;
-                    currentAudio = null;
-                }
+                if (currentAudio) { currentAudio.pause(); currentAudio = null; }
                 const audio = new Audio(`data:audio/mp3;base64,${data.audio_response}`);
                 currentAudio = audio;
+                updateInterruptBtn(true);
                 if (isCallMode) {
                     waitingForReply = true;
+                    startVAD(); // 开启打断检测
                 }
-                audio.play();
                 audio.onended = () => {
-                    if (currentAudio === audio) currentAudio = null;
+                    if (currentAudio !== audio) return;
+                    currentAudio = null;
+                    updateInterruptBtn();
                     if (isCallMode) {
                         waitingForReply = false;
-                        startCallLoop();
+                        stopVAD();
+                        setTimeout(() => startCallLoop(), 500);
                     }
                 };
-            } else if (isCallMode) {
-                waitingForReply = false;
-                startCallLoop();
-            }
-        } catch (e) {
-            console.error('TTS 播放失败', e);
-            if (isCallMode) {
-                waitingForReply = false;
-                startCallLoop();
-            }
+                audio.onerror = () => {
+                    if (currentAudio !== audio) return;
+                    currentAudio = null;
+                    updateInterruptBtn();
+                    if (isCallMode) {
+                        waitingForReply = false;
+                        stopVAD();
+                        setTimeout(() => startCallLoop(), 500);
+                    }
+                };
+                await audio.play();
+            } else if (isCallMode) { waitingForReply = false; startCallLoop(); }
+        } catch(e) {
+            console.error('TTS 失败', e);
+            if (isCallMode) startCallLoop();
         }
     }
 
-    function interruptAndStartListening() {
-        if (!isCallMode && !currentAudio) {
-            statusSpan.innerHTML = '⚠️ 没有正在播放的语音';
-            setTimeout(() => statusSpan.innerHTML = isCallMode ? '📞 通话模式' : '✅ 在线', 1000);
-            return;
+    function updateInterruptBtn(show) {
+        if (show === undefined) interruptBtn.style.display = (isCallMode || currentAudio) ? 'flex' : 'none';
+        else interruptBtn.style.display = show ? 'flex' : 'none';
+    }
+
+    // 打断（立即开始监听）
+    function handleInterrupt() {
+        if (currentAudio) {
+            currentAudio.pause();
+            currentAudio.currentTime = 0;
+            currentAudio = null;
         }
+        stopVAD();
+        stopListening();
+        updateInterruptBtn(isCallMode);
+        if (isCallMode) {
+            startListening();
+        }
+    }
+    window.handleInterrupt = handleInterrupt;
+    interruptBtn.addEventListener('click', handleInterrupt);
+
+    // 语音识别（启用连续识别，避免话没说完就截断）
+    let recognition = null, isListening = false;
+    function initRecognition() {
+        if (recognition) return;
+        if ('webkitSpeechRecognition' in window && !isAndroidBridgeReady()) {
+            recognition = new webkitSpeechRecognition();
+            recognition.lang = 'zh-CN';
+            recognition.continuous = true;        // 连续识别，不会因为短暂停顿而结束
+            recognition.interimResults = false;
+            recognition.onstart = () => {
+                isListening = true;
+                voiceBtn.classList.add('recording');
+                voiceBtn.innerHTML = '🔴';
+            };
+            recognition.onend = () => {
+                isListening = false;
+                voiceBtn.classList.remove('recording');
+                voiceBtn.innerHTML = '🎤';
+                if (isCallMode && !waitingForReply && !callLoopActive) {
+                    startCallLoop();
+                }
+            };
+            recognition.onresult = async (e) => {
+                // 取最后一个结果（最完整的）
+                const text = e.results[e.results.length - 1][0].transcript;
+                // 收到任何结果后，可以停止识别并进行处理
+                recognition.stop();
+                await sendMessage(text);
+            };
+            recognition.onerror = (err) => {
+                console.error('识别错误', err);
+                isListening = false;
+                voiceBtn.classList.remove('recording');
+                voiceBtn.innerHTML = '🎤';
+                if (isCallMode && !waitingForReply) {
+                    startCallLoop();
+                }
+            };
+        }
+    }
+
+    function isAndroidBridgeReady() {
+        return window.AndroidSpeech && typeof window.AndroidSpeech.startSpeechRecognition === 'function';
+    }
+
+    function startListening() {
+        document.getElementById('plusMenu').classList.remove('visible');
         if (currentAudio) {
             currentAudio.pause();
             currentAudio.currentTime = 0;
@@ -415,163 +594,34 @@
             try { recognition.stop(); } catch(e) {}
             isListening = false;
         }
-        waitingForReply = false;
-        startListen();
-    }
-
-    interruptHeaderBtn.addEventListener('click', () => {
-        interruptAndStartListening();
-        if (isCallMode || currentAudio) {
-            statusSpan.innerHTML = '⏹️ 已打断，请说话...';
-            setTimeout(() => {
-                if (statusSpan.innerHTML === '⏹️ 已打断，请说话...') statusSpan.innerHTML = isCallMode ? '📞 通话模式' : '✅ 在线';
-            }, 1500);
-        }
-        onUserActivity();
-    });
-
-    function startCallLoop() {
-        if (!isCallMode) return;
-        if (callLoopActive) return;
-        if (waitingForReply) return;
-        if (recognition && isListening) return;
-        callLoopActive = true;
-        startListen();
-        callLoopActive = false;
-    }
-
-    // 检测 Android 桥接是否可用
-    function isAndroidBridgeReady() {
-        return window.AndroidSpeech && typeof window.AndroidSpeech.startSpeechRecognition === 'function';
-    }
-
-    function startListen() {
-        if (!isCallMode && currentAudio) {
-            currentAudio.pause();
-            currentAudio.currentTime = 0;
-            currentAudio = null;
-        }
-        if (recognition && isListening) {
-            try { recognition.stop(); } catch(e) {}
-            isListening = false;
-        }
-        if (!recognition && !isAndroidBridgeReady()) {
-            initRecognition();
-        }
-        if (isCallMode) {
-            waitingForReply = false;
-        }
-        onUserActivity();
+        if (!recognition && !isAndroidBridgeReady()) initRecognition();
+        if (isCallMode) waitingForReply = false;
         if (isAndroidBridgeReady()) {
-            console.log("调用 Android 语音识别");
+            voiceBtn.classList.add('recording');
+            voiceBtn.innerHTML = '🔴';
             window.AndroidSpeech.startSpeechRecognition();
         } else if (recognition && !isListening) {
-            recognition.start();
+            try { recognition.start(); } catch(e) { console.error(e); }
         }
     }
 
-    function stopListen() {
-        if (isAndroidBridgeReady()) return;
-        if (recognition && isListening) {
+    function stopListening() {
+        if (isAndroidBridgeReady()) {
+            voiceBtn.classList.remove('recording');
+            voiceBtn.innerHTML = '🎤';
+        } else if (recognition && isListening) {
             recognition.stop();
         }
     }
 
-    // 会话管理
-    async function loadSessions() {
-        try {
-            const res = await fetch(`/sessions/${USER_ID}?limit=50`);
-            const data = await res.json();
-            const sessions = data.sessions || [];
-            if (sessions.length === 0) {
-                sessionsListDiv.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;">暂无对话</div>';
-                return;
-            }
-            let html = '';
-            for (const sess of sessions) {
-                const date = new Date(sess.updated_at).toLocaleDateString('zh-CN');
-                const time = new Date(sess.updated_at).toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' });
-                html += `
-                    <div class="session-item ${currentSessionId === sess.id ? 'active' : ''}" data-session-id="${sess.id}">
-                        <div class="session-title">${escapeHtml(sess.title)}</div>
-                        <div class="session-preview">${escapeHtml(sess.preview || '')}</div>
-                        <div class="session-time">${date} ${time}</div>
-                        <button class="delete-session" data-id="${sess.id}">🗑️</button>
-                    </div>
-                `;
-            }
-            sessionsListDiv.innerHTML = html;
-            document.querySelectorAll('.delete-session').forEach(btn => {
-                btn.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    const sid = parseInt(btn.getAttribute('data-id'));
-                    if (confirm('确定删除此会话吗？')) {
-                        await fetch(`/session/${sid}?user_id=${USER_ID}`, { method: 'DELETE' });
-                        if (currentSessionId === sid) {
-                            await createNewSession();
-                        } else {
-                            await loadSessions();
-                        }
-                        onUserActivity();
-                    }
-                });
-            });
-            document.querySelectorAll('.session-item').forEach(item => {
-                item.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('delete-session')) return;
-                    const sid = parseInt(item.getAttribute('data-session-id'));
-                    if (sid) {
-                        loadSessionMessages(sid);
-                        onUserActivity();
-                        if (window.innerWidth <= 768) sidebar.classList.remove('show');
-                    }
-                });
-            });
-        } catch (err) { console.error(err); }
+    function startCallLoop() {
+        if (!isCallMode || callLoopActive || waitingForReply || (recognition && isListening)) return;
+        callLoopActive = true;
+        startListening();
+        callLoopActive = false;
     }
 
-    async function loadSessionMessages(sessionId) {
-        try {
-            const res = await fetch(`/session/${sessionId}/messages`);
-            const data = await res.json();
-            const messages = data.messages || [];
-            messageBox.innerHTML = '';
-            for (const msg of messages) {
-                const div = document.createElement('div');
-                div.className = `message ${msg.role}`;
-                div.innerHTML = msg.role === 'user' ? `👤 ${escapeHtml(msg.content)}` : `🤖 ${escapeHtml(msg.content)}`;
-                messageBox.appendChild(div);
-            }
-            currentSessionId = sessionId;
-            await loadSessions();
-            if (messageBox.lastChild) messageBox.lastChild.scrollIntoView({ behavior: 'smooth' });
-        } catch (err) { console.error(err); }
-    }
-
-    async function createNewSession() {
-        try {
-            const res = await fetch('/session/new', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: USER_ID, title: '新对话' })
-            });
-            const data = await res.json();
-            currentSessionId = data.session_id;
-            messageBox.innerHTML = '<div class="message ai">你好呀，我们开始聊天吧～</div>';
-            await loadSessions();
-            messageBox.scrollTop = messageBox.scrollHeight;
-            onUserActivity();
-        } catch (err) { console.error(err); }
-    }
-
-    newSessionBtn.addEventListener('click', () => {
-        createNewSession();
-        if (isCallMode) {
-            waitingForReply = false;
-            startCallLoop();
-        }
-    });
-
+    // 发送消息
     async function sendMessage(userText) {
         if (!userText.trim()) return;
         if (!currentSessionId) await createNewSession();
@@ -581,159 +631,152 @@
             currentAudio.currentTime = 0;
             currentAudio = null;
         }
-        if (recognition && isListening) {
-            try { recognition.stop(); } catch(e) {}
-            isListening = false;
-        }
-        if (isCallMode) {
-            waitingForReply = false;
-        }
+        if (recognition && isListening) { recognition.stop(); }
+        if (isCallMode) waitingForReply = false;
+        stopVAD();
 
+        addMessage('user', userText);
         textInput.value = '';
-        sendBtn.disabled = true;
-        voiceBtn.disabled = true;
-        statusSpan.innerHTML = '🤔 AI 思考中...';
+        clearSelectedImage();
+        document.getElementById('plusMenu').classList.remove('visible');
 
         try {
             const chatRes = await fetch('/chat/text', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: userText, user_id: USER_ID, session_id: currentSessionId })
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ message:userText, user_id:USER_ID, session_id:currentSessionId })
             });
             const chatData = await chatRes.json();
-            const aiText = chatData.response;
-            await loadSessionMessages(currentSessionId);
-            await playTTS(aiText, currentVoice);
-            statusSpan.innerHTML = '✅ 回复完成';
-        } catch (err) {
-            console.error(err);
-            statusSpan.innerHTML = '❌ 网络错误';
-            if (isCallMode) {
-                waitingForReply = false;
-                startCallLoop();
-            }
-        } finally {
-            sendBtn.disabled = false;
-            voiceBtn.disabled = false;
-            if (!isCallMode) onUserActivity();
-        }
-        if (!isCallMode) onUserActivity();
-    }
+            currentSessionId = chatData.session_id;
+            addMessage('assistant', chatData.response);
+            await speakText(chatData.response, currentVoice);
 
-    sendBtn.addEventListener('click', () => {
-        if (isCallMode) return;
-        sendMessage(textInput.value.trim());
-    });
-    textInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            if (isCallMode) return;
-            sendMessage(textInput.value.trim());
-        }
-    });
-    textInput.addEventListener('input', onUserActivity);
-
-    let recognition = null;
-    let isListening = false;
-
-    function initRecognition() {
-        if (recognition) return;
-        if ('webkitSpeechRecognition' in window && !isAndroidBridgeReady()) {
-            recognition = new webkitSpeechRecognition();
-            recognition.lang = 'zh-CN';
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            recognition.onstart = () => { isListening = true; statusSpan.innerHTML = '🔴 正在听...'; };
-            recognition.onend = () => {
-                isListening = false;
-                if (isCallMode && !waitingForReply && !callLoopActive) {
-                    setTimeout(() => startCallLoop(), 200);
-                }
-            };
-            recognition.onresult = async (e) => {
-                const text = e.results[0][0].transcript;
-                statusSpan.innerHTML = `📝 ${text}`;
-                await sendMessage(text);
-            };
-            recognition.onerror = (err) => {
-                console.error('识别错误', err);
-                statusSpan.innerHTML = '❌ 识别失败';
-                isListening = false;
-                if (isCallMode && !waitingForReply) {
-                    setTimeout(() => startCallLoop(), 1000);
-                }
-            };
+            greetingSent = false;
+            resetGreetingTimer();
+            await loadSessions();
+        } catch(e) {
+            console.error(e);
+            addMessage('assistant', '抱歉，网络好像不太好，请稍后再试。');
+            if (isCallMode) startCallLoop();
         }
     }
 
-    window.onAndroidSpeechResult = async (text) => {
-        console.log("安卓识别结果:", text);
-        statusSpan.innerHTML = `📝 ${text}`;
-        await sendMessage(text);
+    window.sendMessageText = () => {
+        const text = textInput.value.trim();
+        if (!isCallMode) sendMessage(text);
     };
 
-    // 语音按钮（点击触发）
-    voiceBtn.addEventListener('click', () => {
-        if (isCallMode) return;
-        startListen();
-    });
+    function handleKey(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (!isCallMode) sendMessage(textInput.value.trim());
+        }
+    }
+    window.handleKey = handleKey;
 
-    callBtn.addEventListener('click', () => {
+    window.handleVoiceClick = function() {
+        if (isRecording()) {
+            stopListening();
+        } else {
+            if (!isCallMode) startListening();
+        }
+    };
+
+    function isRecording() { return isListening; }
+
+    window.toggleCallMode = function() {
+        document.getElementById('plusMenu').classList.remove('visible');
         if (isCallMode) {
             isCallMode = false;
-            callBtn.textContent = '📞 语音通话';
             callBtn.classList.remove('active');
-            voiceBtn.disabled = false;
-            voiceBtn.style.opacity = '1';
+            callBtn.innerHTML = '📞 通话';
             if (recognition && isListening) recognition.stop();
             waitingForReply = false;
             callLoopActive = false;
-            statusSpan.innerHTML = '✅ 通话结束 | 在线';
-            resetIdleTimer();
-            if (recognition) {
-                try { recognition.abort(); } catch(e) {}
-                recognition = null;
-            }
-            initRecognition();
+            stopVAD();
+            updateInterruptBtn(false);
+            resetGreetingTimer();
         } else {
             isCallMode = true;
-            callBtn.textContent = '🔴 通话中...';
             callBtn.classList.add('active');
-            voiceBtn.disabled = true;
-            voiceBtn.style.opacity = '0.5';
-            if (idleTimer) clearTimeout(idleTimer);
-            statusSpan.innerHTML = '📞 通话模式已开启，请开始说话...';
+            callBtn.innerHTML = '📞 挂断';
+            clearTimeout(greetingTimeout);
+            updateInterruptBtn(true);
             waitingForReply = false;
             callLoopActive = false;
             startCallLoop();
         }
-        onUserActivity();
-    });
+    };
 
-    async function loadVoices() {
-        try {
-            const res = await fetch('/voices');
-            const data = await res.json();
-            const voices = data.voices;
-            voiceSelect.innerHTML = '';
-            for (const v of voices) {
-                const option = document.createElement('option');
-                option.value = v.name;
-                option.textContent = v.display;
-                if (v.name === currentVoice) option.selected = true;
-                voiceSelect.appendChild(option);
-            }
-            voiceSelect.addEventListener('change', () => {
-                currentVoice = voiceSelect.value;
-                localStorage.setItem('preferred_voice', currentVoice);
-                onUserActivity();
-            });
-        } catch (err) { console.error('加载音色失败', err); }
+    // 图片上传
+    function handleImageSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+            selectedImageBase64 = e.target.result;
+            document.getElementById('imagePreview').src = selectedImageBase64;
+            document.getElementById('imagePreviewContainer').style.display = 'flex';
+        };
+        reader.readAsDataURL(file);
+    }
+    window.handleImageSelect = handleImageSelect;
+    window.removeImage = () => { clearSelectedImage(); };
+    function clearSelectedImage() {
+        selectedImageBase64 = null;
+        document.getElementById('imagePreviewContainer').style.display = 'none';
+        document.getElementById('imagePreview').src = '';
+        document.getElementById('imageInput').value = '';
     }
 
-    initRecognition();
-    loadVoices();
-    loadSessions();
-    resetIdleTimer();
+    function addImageMessage(role, base64) {
+        const wrapper = document.createElement('div');
+        wrapper.className = `message ${role}`;
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
+        contentDiv.style.padding = '4px'; contentDiv.style.background = 'transparent';
+        const img = document.createElement('img');
+        img.src = base64;
+        img.style.maxWidth = '220px'; img.style.borderRadius = '16px';
+        contentDiv.appendChild(img);
+        wrapper.appendChild(contentDiv);
+        messageBox.appendChild(wrapper);
+        scrollToBottom();
+    }
+
+    window.togglePlusMenu = () => document.getElementById('plusMenu').classList.toggle('visible');
+
+    const IDLE_SECONDS = 20;
+    function resetGreetingTimer() {
+        clearTimeout(greetingTimeout);
+        if (isCallMode || greetingSent) return;
+        greetingTimeout = setTimeout(sendGreeting, IDLE_SECONDS * 1000);
+    }
+
+    async function sendGreeting() {
+        if (greetingSent || isCallMode) return;
+        if (messageBox.querySelectorAll('.message').length === 0) return;
+        greetingSent = true;
+        clearTimeout(greetingTimeout);
+        const greeting = '你好呀，我在这里，有什么想聊的吗？';
+        addMessage('assistant', greeting);
+        await speakText(greeting);
+    }
+
+    function escapeHtml(str) {
+        return String(str).replace(/[&<>]/g, m => m==='&'?'&amp;':m==='<'?'&lt;':'&gt;');
+    }
+
+    async function init() {
+        await loadVoices();
+        initRecognition();
+        await loadSessions();
+        if (!currentSessionId) await createNewSession();
+        else await openSession(currentSessionId);
+        resetGreetingTimer();
+        document.addEventListener('click', resetGreetingTimer);
+        textInput.addEventListener('input', resetGreetingTimer);
+    }
+    init();
 })();
 </script>
 </body>

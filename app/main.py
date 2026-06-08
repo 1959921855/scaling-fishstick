@@ -56,7 +56,7 @@ class NewSessionRequest(BaseModel):
     user_id: str = "default_user"
     title: Optional[str] = "新对话"
 
-# ==================== 模型服务（带重试） ====================
+# ==================== 模型服务（带重试，错误返回前端） ====================
 class ModelService:
     def __init__(self):
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -78,8 +78,8 @@ class ModelService:
                 response = self.client.chat.completions.create(
                     model="deepseek-chat",
                     messages=messages,
-                    temperature=0.5,          # 更确定，回复更短
-                    max_tokens=200,           # 限制输出长度
+                    temperature=0.7,
+                    max_tokens=500,
                     tools=tools,
                     tool_choice=tool_choice
                 )
@@ -101,7 +101,7 @@ class ModelService:
 
 model_service = ModelService()
 
-# ==================== 工具定义 ====================
+# ==================== 工具定义（包含黄金查询） ====================
 TOOLS = [
     {
         "type": "function",
@@ -136,11 +136,18 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_news",
-            "description": "搜索最新新闻资讯",
+            "description": (
+                "搜索新闻资讯。\n"
+                "凡是用户询问：新闻、热点、发生了什么、今天有什么事、昨天有什么新闻、本周新闻、最新消息等，必须优先调用本工具。\n"
+                "查询参数必须保留时间信息。\n"
+                "例如：\n"
+                "用户：南京昨天有什么新闻 → {\"query\":\"南京昨天新闻\"}\n"
+                "用户：今天南京新闻 → {\"query\":\"南京今天新闻\"}\n"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "新闻关键词"}
+                    "query": {"type": "string", "description": "必须包含时间信息的新闻关键词"}
                 },
                 "required": ["query"]
             }
@@ -168,11 +175,19 @@ TOOLS = [
             "description": "获取当前时间、日期、星期几",
             "parameters": {"type": "object", "properties": {}}
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_gold_price",
+            "description": "查询黄金实时价格，返回美元/盎司及人民币/克",
+            "parameters": {"type": "object", "properties": {}}
+        }
     }
 ]
 
-# ==================== 搜索（Tavily，带重试） ====================
-async def web_search(query: str, max_results: int = 5) -> List[tuple]:
+# ==================== 搜索（Tavily，支持 days 参数，高级搜索） ====================
+async def web_search(query: str, max_results: int = 5, days: int = None) -> List[tuple]:
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
         logger.error("❌ TAVILY_API_KEY 未设置")
@@ -183,9 +198,12 @@ async def web_search(query: str, max_results: int = 5) -> List[tuple]:
         "api_key": api_key,
         "query": query,
         "max_results": max_results,
-        "search_depth": "basic",
+        "search_depth": "advanced",
         "include_answer": False
     }
+    if days is not None:
+        payload["days"] = days
+
     headers = {"Content-Type": "application/json"}
 
     for attempt in range(2):
@@ -284,7 +302,7 @@ async def get_weather_tool(city: str, date_type: str = "today") -> str:
         logger.error(f"❌ 天气异常: {e}")
         return "天气服务暂时不可用。"
 
-# ==================== 股票（保持不变） ====================
+# ==================== 股票（已有重试） ====================
 NAME_TO_CODE = {
     "工商银行": "sh601398", "建设银行": "sh601939", "农业银行": "sh601288",
     "中国银行": "sh601988", "招商银行": "sh600036", "交通银行": "sh601328",
@@ -414,6 +432,64 @@ async def get_stock_quote(symbol: str, date: Optional[str] = None) -> str:
         logger.error(f"股票查询异常: {e}")
         return "股票查询失败，请稍后再试。"
 
+# ==================== 黄金价格（GoldAPI + 免费汇率换算） ====================
+async def get_gold_price_tool() -> str:
+    """获取国际金价，并换算为人民币/克"""
+    gold_api_key = os.getenv("GOLD_API_KEY")
+    if not gold_api_key:
+        logger.error("❌ GOLD_API_KEY 未设置")
+        return "黄金价格服务未配置，请联系管理员。"
+
+    # 1. 查询美元金价
+    url_gold = "https://www.goldapi.io/api/XAU/USD"
+    headers_gold = {
+        "x-access-token": gold_api_key,
+        "Content-Type": "application/json"
+    }
+
+    usd_price = None
+    for attempt in range(2):
+        try:
+            logger.info("🥇 查询 GoldAPI 黄金价格...")
+            resp = await http_client.get(url_gold, headers=headers_gold, timeout=10.0)
+            resp.raise_for_status()
+            data = resp.json()
+            usd_price = data.get("price")
+            if usd_price is not None:
+                break
+        except Exception as e:
+            logger.error(f"GoldAPI 失败 (尝试 {attempt+1}): {e}")
+            if attempt == 0:
+                await asyncio.sleep(1)
+    if usd_price is None:
+        return "暂时无法获取黄金价格，请稍后再试。"
+
+    # 2. 查询美元兑人民币汇率（免费 API，无需密钥）
+    cny_rate = None
+    try:
+        logger.info("💱 查询美元兑人民币汇率...")
+        rate_resp = await http_client.get(
+            "https://api.exchangerate-api.com/v4/latest/USD",
+            timeout=10.0
+        )
+        rate_resp.raise_for_status()
+        rate_data = rate_resp.json()
+        cny_rate = rate_data.get("rates", {}).get("CNY")
+    except Exception as e:
+        logger.error(f"汇率查询失败: {e}")
+
+    # 3. 计算
+    ounce_to_gram = 31.1035
+    price_usd_per_ounce = usd_price
+    if cny_rate:
+        price_cny_per_gram = (price_usd_per_ounce * cny_rate) / ounce_to_gram
+        return (
+            f"当前国际黄金价格约为每盎司{price_usd_per_ounce:.2f}美元，"
+            f"折合人民币约每克{price_cny_per_gram:.2f}元。"
+        )
+    else:
+        return f"当前国际黄金价格约为每盎司{price_usd_per_ounce:.2f}美元（人民币汇率暂时获取失败）。"
+
 # ==================== 时间工具 ====================
 def get_current_time() -> str:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
@@ -433,38 +509,95 @@ async def execute_tool(tool_name: str, arguments: dict) -> str:
         elif tool_name == "web_search":
             query = arguments.get("query", "")
             if not query: return "请提供搜索词"
+            if any(k in query for k in ["新闻", "热点", "今天", "昨天", "本周", "最新消息", "发生什么"]):
+                return await execute_tool("search_news", {"query": query})
             results = await web_search(query)
-            if not results: return "未找到相关信息。"
+            if not results or (len(results) == 1 and results[0][0] in ["搜索失败", "未找到相关信息", "搜索服务未配置"]):
+                return "未找到相关信息。"
             lines = [f"🔍 搜索“{query}”结果："]
             for i, (t, b, l) in enumerate(results[:5], 1):
-                lines.append(f"{i}. {t}")
-                lines.append(f"   {b[:80]}...")          # 缩短摘要
+                clean_t = re.sub(r'[*#]', '', t)
+                clean_b = re.sub(r'[*#]', '', b[:120])
+                lines.append(f"{i}. {clean_t}")
+                lines.append(f"   {clean_b}...")
             return "\n".join(lines)
         elif tool_name == "search_news":
             query = arguments.get("query", "")
             if not query: return "请提供新闻关键词"
-            results = await web_search(f"{query} 新闻", max_results=6)
-            if not results: return "未找到相关新闻。"
+
+            search_query = query
+            days_filter = None
+            if "昨天" in query:
+                query_clean = query.replace("昨天", "").strip()
+                search_query = f"{query_clean} 昨天 新闻" if query_clean else "昨天 新闻"
+                days_filter = 2
+            elif "今天" in query:
+                query_clean = query.replace("今天", "").strip()
+                search_query = f"{query_clean} 今天 新闻" if query_clean else "今天 新闻"
+                days_filter = 1
+            elif "本周" in query:
+                query_clean = query.replace("本周", "").strip()
+                search_query = f"{query_clean} 本周 新闻" if query_clean else "本周 新闻"
+                days_filter = 7
+            else:
+                search_query = f"{query} 新闻"
+
+            logger.info(f"新闻搜索词: {search_query}, days={days_filter}")
+            results = await web_search(search_query, max_results=10, days=days_filter)
+            if not results:
+                return "未找到相关新闻。"
+
+            WEATHER_KEYWORDS = [
+                "天气", "气温", "空气质量", "降水", "降雨", "风力", "湿度",
+                "穿衣", "紫外线", "气象", "天气预报", "最高温", "最低温",
+                "感冒", "中暑", "寒潮", "高温"
+            ]
+            filtered = []
+            for t, b, l in results:
+                text = t + b
+                if any(k in text for k in WEATHER_KEYWORDS):
+                    continue
+                filtered.append((t, b, l))
+
+            if not filtered:
+                return "未找到相关新闻。"
+
+            seen = set()
+            unique_news = []
+            for item in filtered:
+                if item[0] not in seen:
+                    seen.add(item[0])
+                    unique_news.append(item)
+
             lines = [f"📰 关于“{query}”的新闻："]
-            for i, (t, b, l) in enumerate(results[:6], 1):
-                lines.append(f"{i}. {t}")
-                cb = re.sub(r'[\\*]', '', b)[:80].strip()   # 缩短摘要
+            for i, (t, b, l) in enumerate(unique_news[:6], 1):
+                clean_t = re.sub(r'[*#]', '', t)
+                cb = re.sub(r'[*#]', '', b)[:120].strip()
+                lines.append(f"{i}. {clean_t}")
                 if cb: lines.append(f"   {cb}")
             return "\n".join(lines)
+
         elif tool_name == "get_stock":
             return await get_stock_quote(arguments.get("symbol"), arguments.get("date"))
         elif tool_name == "get_current_time":
             return get_current_time()
+        elif tool_name == "get_gold_price":
+            return await get_gold_price_tool()
         return "未知工具"
     except Exception as e:
         logger.error(f"❌ 工具执行异常: {e}")
         return "服务暂时不可用，请稍后重试"
 
-# ==================== 系统提示词（精简） ====================
+# ==================== 系统提示词 ====================
 SYSTEM_PROMPT = (
-    "你是小暖，老年人陪伴助手。回答简短自然。"
-    "实时信息必须调用工具。禁止编造实时数据。"
-    "未指明城市时天气默认查询南京。"
+    "你是小暖，一个亲切、耐心的老年人语音陪伴助手。\n"
+    "请用简单易懂的口语和老人交流，使用“您”，回复尽量简短（2-3句话），方便语音播放。\n"
+    "当需要实时信息（天气、新闻、股价、时间、黄金价格等）时，请调用提供的工具函数，并根据返回结果生成自然回答。\n"
+    "如果用户没有指明城市，天气默认查询南京。\n"
+    "【重要】如果用户询问新闻、热点、今天发生什么、昨天发生什么、最新消息等内容，必须优先调用 search_news，不要调用 web_search。\n"
+    "如果用户询问黄金价格、金价，请调用 get_gold_price。\n"
+    "绝对不要使用任何 Markdown 符号，包括但不限于：星号（*）、井号（#）、减号（-）用于列表、反引号（`）等。\n"
+    "请使用纯文本回复，如需列举，直接使用数字加点（1. 2. 3.）或换行。"
 )
 
 # ==================== 应用生命周期 ====================
@@ -482,7 +615,7 @@ async def lifespan(app: FastAPI):
     await database.disconnect()
     logger.info("🛑 服务关闭")
 
-app = FastAPI(title="小暖智能体", version="24.1", lifespan=lifespan)
+app = FastAPI(title="小暖智能体", version="24.1-goldapi-cny", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 templates_dir = os.path.join(os.path.dirname(__file__), "..", "templates")
@@ -548,8 +681,7 @@ async def text_chat(request: ChatRequest):
     if session_id is None:
         session_id = await create_session(user_id, "新对话")
 
-    # 历史消息从6条缩减为4条
-    history = await get_session_messages(session_id, limit=4)
+    history = await get_session_messages(session_id, limit=6)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
@@ -584,6 +716,8 @@ async def text_chat(request: ChatRequest):
     except Exception as e:
         logger.error(f"❌ 对话异常: {e}", exc_info=True)
         final_reply = f"系统异常：{str(e)}"
+
+    final_reply = final_reply.replace('*', '')
 
     await save_message(user_id, session_id, "user", user_msg)
     await save_message(user_id, session_id, "assistant", final_reply)
