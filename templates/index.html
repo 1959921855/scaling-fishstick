@@ -36,7 +36,6 @@
             overflow: hidden;
         }
 
-        /* ========== 遮罩层 ========== */
         .sidebar-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -46,11 +45,24 @@
         }
         .sidebar-overlay.visible { display: block; }
 
-        /* ========== 侧边栏关闭按钮 ========== */
+        .sidebar {
+            width: 280px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+            z-index: 50;
+            box-shadow: var(--shadow-md);
+            flex-shrink: 0;
+            position: relative;
+        }
+        .sidebar.hidden { transform: translateX(-100%); }
         .sidebar-close-btn {
-            position: fixed;
-            top: 16px;
-            left: 296px;
+            display: none;
+            position: absolute;
+            top: 12px;
+            right: 12px;
             width: 36px; height: 36px;
             background: var(--surface);
             border-radius: 50%;
@@ -62,20 +74,6 @@
             z-index: 51;
             border: none;
         }
-
-        /* ========== 侧边栏 ========== */
-        .sidebar {
-            width: 280px;
-            background: var(--surface);
-            border-right: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
-            z-index: 50;
-            box-shadow: var(--shadow-md);
-            flex-shrink: 0;
-        }
-        .sidebar.hidden { transform: translateX(-100%); }
         .sidebar-header {
             padding: 24px 20px 16px;
             display: flex;
@@ -120,7 +118,6 @@
         }
         .delete-session-btn:hover { background: #fee9e5; color: #c45a4e; }
 
-        /* ========== 主区域 ========== */
         .main { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--bg); }
         .chat-header {
             padding: 12px 20px;
@@ -169,7 +166,6 @@
         .user .message-content { background: var(--primary); color: white; border-bottom-right-radius: 8px; }
         .assistant .message-content { background: var(--surface); color: var(--text); border-bottom-left-radius: 8px; }
 
-        /* ========== 输入区域（固定底部） ========== */
         .input-container {
             position: fixed;
             bottom: 0; left: 0; right: 0;
@@ -227,7 +223,6 @@
         .image-preview { width: 42px; height: 42px; border-radius: 12px; object-fit: cover; border: 1px solid var(--border); }
         .remove-image-btn { font-size: 0.8rem; color: #c45a4e; cursor: pointer; font-weight: 500; }
 
-        /* ========== 移动端 ========== */
         @media (max-width: 768px) {
             .sidebar {
                 position: fixed;
@@ -252,12 +247,10 @@
 </head>
 <body>
 
-<!-- 遮罩层 -->
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
-<!-- 关闭按钮 -->
-<button class="sidebar-close-btn" id="sidebarCloseBtn" onclick="closeSidebar()">✕</button>
 
 <div class="sidebar" id="sidebar">
+    <button class="sidebar-close-btn" id="sidebarCloseBtn" onclick="closeSidebar()">✕</button>
     <div class="sidebar-header">
         <h2>✨ 小暖</h2>
         <button class="new-session-btn" onclick="createNewSession()">＋ 新对话</button>
@@ -324,11 +317,9 @@
     const sidebarOverlay = document.getElementById('sidebarOverlay');
     const sidebarCloseBtn = document.getElementById('sidebarCloseBtn');
 
-    // ========== 侧边栏控制（修复：关闭按钮只在移动端显示） ==========
     window.openSidebar = function() {
         sidebar.classList.add('visible');
         sidebarOverlay.classList.add('visible');
-        // 只在移动端显示关闭按钮
         if (window.innerWidth <= 768) {
             sidebarCloseBtn.style.display = 'flex';
         }
@@ -343,7 +334,6 @@
         else openSidebar();
     };
 
-    // VAD 变量
     let vadStream = null;
     let vadAudioContext = null;
     let vadAnalyser = null;
@@ -355,7 +345,6 @@
     let vadOverCount = 0;
     let vadSilenceCount = 0;
 
-    // 音色加载
     async function loadVoices() {
         try {
             const res = await fetch('/voices');
@@ -375,7 +364,6 @@
         localStorage.setItem('preferred_voice', currentVoice);
     };
 
-    // 会话管理
     async function loadSessions() {
         try {
             const res = await fetch(`/sessions/${USER_ID}?limit=50`);
@@ -472,7 +460,6 @@
 
     function scrollToBottom() { messageBox.scrollTop = messageBox.scrollHeight; }
 
-    // VAD
     async function startVAD() {
         if (vadRunning) return;
         try {
@@ -514,7 +501,6 @@
         vadAnalyser = null; vadRunning = false; vadOverCount = 0; vadSilenceCount = 0;
     }
 
-    // TTS 播放
     async function speakText(text, voice = currentVoice) {
         if (!text) return;
         try {
@@ -545,7 +531,6 @@
         interruptBtn.style.display = (show === undefined ? (isCallMode || currentAudio) : show) ? 'flex' : 'none';
     }
 
-    // 打断
     function handleInterrupt() {
         if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; currentAudio = null; }
         stopVAD(); stopListening(); updateInterruptBtn(isCallMode);
@@ -554,7 +539,6 @@
     window.handleInterrupt = handleInterrupt;
     interruptBtn.addEventListener('click', handleInterrupt);
 
-    // 语音识别
     let recognition = null, isListening = false;
     function initRecognition() {
         if (recognition) return;
@@ -593,7 +577,6 @@
         callLoopActive = true; startListening(); callLoopActive = false;
     }
 
-    // 发送消息
     async function sendMessage(userText) {
         if (!userText.trim()) return;
         if (!currentSessionId) await createNewSession();
