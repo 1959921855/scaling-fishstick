@@ -130,20 +130,26 @@
             align-items: center; justify-content: center; border-radius: 12px;
             background: var(--surface); box-shadow: var(--shadow-sm); border: none; cursor: pointer;
         }
-        .header-title { font-weight: 600; font-size: 1.1rem; }
-        .header-right { display: flex; align-items: center; gap: 8px; }
+        .header-title { font-weight: 600; font-size: 1.1rem; white-space: nowrap; }
+        .header-right {
+            display: flex; align-items: center; gap: 6px;
+            flex-wrap: nowrap;
+            flex-shrink: 0;
+        }
         .interrupt-btn {
             background: #fff6f5; border: 1px solid #ffdbd9; border-radius: 24px;
-            padding: 6px 14px; font-size: 0.85rem; font-weight: 500; color: #c45a4e;
+            padding: 6px 12px; font-size: 0.85rem; font-weight: 500; color: #c45a4e;
             cursor: pointer; display: none; align-items: center; gap: 4px;
+            white-space: nowrap;
         }
         .call-mode-btn {
-            background: #f5f1ed; border-radius: 24px; padding: 6px 14px;
+            background: #f5f1ed; border-radius: 24px; padding: 6px 12px;
             font-size: 0.85rem; font-weight: 500; color: var(--text); border: none; cursor: pointer;
+            white-space: nowrap;
         }
         .call-mode-btn.active { background: #fee9e5; color: #c45a4e; }
         .voice-select {
-            padding: 6px 14px; border-radius: 24px; border: 1px solid var(--border);
+            padding: 6px 12px; border-radius: 24px; border: 1px solid var(--border);
             background: var(--surface); font-size: 0.85rem; color: var(--text); outline: none;
         }
 
@@ -238,9 +244,9 @@
             .chat-area { padding: 16px 12px 100px; }
             .chat-header { padding: 8px 12px; }
             .header-right { gap: 4px; }
-            .interrupt-btn, .call-mode-btn { padding: 4px 10px; font-size: 0.78rem; }
-            .voice-select { padding: 4px 10px; font-size: 0.78rem; max-width: 90px; }
-            .header-title { font-size: 0.95rem; }
+            .interrupt-btn, .call-mode-btn { padding: 4px 8px; font-size: 0.75rem; }
+            .voice-select { padding: 4px 8px; font-size: 0.75rem; max-width: 80px; }
+            .header-title { font-size: 0.9rem; }
             .input-container { padding: 10px 12px 12px; }
         }
     </style>
@@ -560,7 +566,13 @@
     function startListening() {
         document.getElementById('plusMenu').classList.remove('visible');
         if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; currentAudio = null; }
-        if (recognition && isListening) { try { recognition.stop(); } catch(e) {} isListening = false; }
+        if (recognition && isListening) {
+            try { recognition.stop(); } catch(e) {}
+            isListening = false;
+            voiceBtn.classList.remove('recording');
+            voiceBtn.innerHTML = '🎤';
+            return;
+        }
         if (!recognition && !isAndroidBridgeReady()) initRecognition();
         if (isCallMode) waitingForReply = false;
         if (isAndroidBridgeReady()) { voiceBtn.classList.add('recording'); voiceBtn.innerHTML = '🔴'; window.AndroidSpeech.startSpeechRecognition(); }
@@ -569,7 +581,7 @@
 
     function stopListening() {
         if (isAndroidBridgeReady()) { voiceBtn.classList.remove('recording'); voiceBtn.innerHTML = '🎤'; }
-        else if (recognition && isListening) recognition.stop();
+        else if (recognition && isListening) { recognition.stop(); }
     }
 
     function startCallLoop() {
@@ -599,7 +611,13 @@
     window.sendMessageText = () => { if (!isCallMode) sendMessage(textInput.value.trim()); };
     function handleKey(e) { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); if (!isCallMode) sendMessage(textInput.value.trim()); } }
     window.handleKey = handleKey;
-    window.handleVoiceClick = () => { if (isRecording()) stopListening(); else if (!isCallMode) startListening(); };
+    window.handleVoiceClick = function() {
+        if (isListening) {
+            stopListening();
+        } else {
+            if (!isCallMode) startListening();
+        }
+    };
     function isRecording() { return isListening; }
 
     window.toggleCallMode = function() {
