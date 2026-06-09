@@ -331,6 +331,25 @@
         else openSidebar();
     };
 
+    // ========== 安卓语音识别回调（新增） ==========
+    window.onAndroidSpeechResult = async function(text) {
+        voiceBtn.classList.remove('recording');
+        voiceBtn.innerHTML = '🎤';
+        if (text && text.trim()) {
+            await sendMessage(text.trim());
+        } else if (isCallMode) {
+            startCallLoop();
+        }
+    };
+
+    window.onAndroidSpeechError = function() {
+        voiceBtn.classList.remove('recording');
+        voiceBtn.innerHTML = '🎤';
+        if (isCallMode) {
+            startCallLoop();
+        }
+    };
+
     async function loadVoices() {
         try {
             const res = await fetch('/voices');
